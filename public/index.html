@@ -161,6 +161,14 @@
     <div class="row"><span class="dot active"></span>稼働中 — 着席して作業中</div>
     <div class="row"><span class="dot recent"></span>直近1時間 — デスク横で待機</div>
     <div class="row"><span class="dot idle"></span>待機中 — 空席</div>
+    <div class="row" style="margin-top:8px">表示期間
+      <select id="range" style="font-size:12px;border:1px solid #d5dde6;border-radius:8px;padding:2px 6px;background:#fff;color:#3c4c5d">
+        <option value="1">24時間</option>
+        <option value="7">7日</option>
+        <option value="30" selected>30日</option>
+        <option value="all">すべて</option>
+      </select>
+    </div>
   </div>
   <div class="stats" id="stats"></div>
   <div class="updated" id="updated"></div>
@@ -518,29 +526,38 @@ function buildPlate() {
 }
 
 /* ══════════ レイアウト ══════════ */
-// デスクの配置スロット。中央 (.5,.5) はミーティングテーブル
-// 4台まで: 風車型 / 5〜8台: 2列のオフィスレイアウト / それ以上: 外周リング
+// デスクの配置。
+// 4台まで: 風車型(中央にミーティングテーブル) / 5台以上: グリッド配置(デスクを自動縮小)
 const SLOTS_4 = [
   [.32, .18], [.82, .32], [.18, .68], [.70, .90],
 ];
-const SLOTS_8 = [
-  [.36, .26], [.62, .26], [.10, .26], [.88, .26],
-  [.62, .78], [.36, .78], [.10, .78], [.88, .78],
-];
 function layoutProjects(projects) {
   const n = projects.length;
-  const slots = n <= 4 ? SLOTS_4 : SLOTS_8;
-  const placed = [];
-  projects.forEach((p, i) => {
-    let u, v;
-    if (i < slots.length) { [u, v] = slots[i]; }
-    else { // 予備: 外周リングに配置
-      const a = (i - slots.length) / Math.max(1, n - slots.length) * Math.PI * 2;
-      u = .5 + Math.cos(a) * .38; v = .5 + Math.sin(a) * .38;
-    }
-    placed.push({ p, u, v });
+  if (n <= 4) {
+    return {
+      cozy: true,
+      placed: projects.map((p, i) => ({ p, u: SLOTS_4[i][0], v: SLOTS_4[i][1], scale: 1 })),
+    };
+  }
+  // グリッド: 手前の行から新しい順に埋める
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const m = .12;
+  const su = (1 - 2 * m) / cols;
+  const sv = (1 - 2 * m) / rows;
+  // 隣接デスクの画面距離からスケールを決める(デスク一式の幅 ≈ 170px)
+  const gap = Math.min(su, sv) * (PLATE.w / 2) * 1.118;
+  const scale = Math.max(.42, Math.min(1, gap / 175));
+  const placed = projects.map((p, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    return {
+      p,
+      u: m + (col + .5) * su,
+      v: m + (row + .5) * sv, // row 0 = 手前(最新)
+      scale,
+    };
   });
-  return placed;
+  return { cozy: false, placed };
 }
 
 /* ══════════ 描画 ══════════ */
@@ -552,27 +569,38 @@ function render() {
   svg.appendChild(buildDefs());
   svg.appendChild(buildPlate());
 
-  const projects = DATA.projects || [];
-  const placed = layoutProjects(projects);
+  // 表示期間フィルタ
+  const all = DATA.projects || [];
+  const rangeVal = $('range').value;
+  const days = rangeVal === 'all' ? Infinity : Number(rangeVal);
+  const now = Date.now();
+  const projects = isFinite(days)
+    ? all.filter((p) => p.lastTs && now - Date.parse(p.lastTs) < days * 86400e3)
+    : all;
+  const hidden = all.length - projects.length;
+
+  const { cozy, placed } = layoutProjects(projects);
   const hub = iso(.5, .5);
 
-  // 接続線(家具より下のレイヤー)
-  const linkLayer = el('g');
-  svg.appendChild(linkLayer);
-  for (const { p, u, v } of placed) {
-    const pt = iso(u, v);
-    const mx = (pt.x + hub.x) / 2, my = (pt.y + hub.y) / 2 - 20;
-    linkLayer.appendChild(el('path', {
-      d: `M${pt.x},${pt.y} Q${mx},${my} ${hub.x},${hub.y}`,
-      class: 'link' + (p.status === 'idle' ? ' idle' : ''),
-    }));
+  // 接続線(コンパクト表示のときのみ / 家具より下のレイヤー)
+  if (cozy) {
+    const linkLayer = el('g');
+    svg.appendChild(linkLayer);
+    for (const { p, u, v } of placed) {
+      const pt = iso(u, v);
+      const mx = (pt.x + hub.x) / 2, my = (pt.y + hub.y) / 2 - 20;
+      linkLayer.appendChild(el('path', {
+        d: `M${pt.x},${pt.y} Q${mx},${my} ${hub.x},${hub.y}`,
+        class: 'link' + (p.status === 'idle' ? ' idle' : ''),
+      }));
+    }
   }
 
   // シーンアイテムを奥→手前の順に描画(ペインターアルゴリズム)
   const items = [];
 
-  // デスクが多いときはスペースを空けるため装飾を間引く
-  const deco = projects.length <= 4 ? [
+  // グリッド表示のときは装飾を四隅の植物だけに間引く
+  const deco = cozy ? [
     { u: .46, v: .94, build: whiteboard },
     { u: .88, v: .72, build: serverRack },
     { u: .13, v: .34, build: coffeeCorner },
@@ -581,11 +609,10 @@ function render() {
     { u: .07, v: .07, build: plant },
     { u: .93, v: .07, build: plant },
   ] : [
-    { u: .46, v: .94, build: whiteboard },
-    { u: .93, v: .93, build: serverRack },
-    { u: .07, v: .93, build: plant },
-    { u: .07, v: .07, build: plant },
-    { u: .93, v: .07, build: plant },
+    { u: .04, v: .96, build: plant },
+    { u: .96, v: .96, build: plant },
+    { u: .04, v: .04, build: plant },
+    { u: .96, v: .04, build: plant },
   ];
   for (const d of deco) {
     const pt = iso(d.u, d.v);
@@ -594,16 +621,16 @@ function render() {
     items.push({ y: pt.y, el: g });
   }
 
-  { // 中央ミーティングテーブル
+  if (cozy) { // 中央ミーティングテーブル
     const g = meetingTable();
     g.setAttribute('transform', `translate(${hub.x},${hub.y})`);
     items.push({ y: hub.y, el: g });
   }
 
-  for (const { p, u, v } of placed) {
+  for (const { p, u, v, scale } of placed) {
     const pt = iso(u, v);
     const g = workstation(p);
-    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    g.setAttribute('transform', `translate(${pt.x},${pt.y}) scale(${scale})`);
     // click だと再描画とマウス操作が競合して不発になることがあるため pointerdown
     g.addEventListener('pointerdown', () => openPanel(p.id || p.dirName));
     items.push({ y: pt.y, el: g });
@@ -616,13 +643,20 @@ function render() {
   $('updated').textContent = updatedLine();
 
   if (selectedId) {
-    const p = projects.find((x) => (x.id || x.dirName) === selectedId);
+    const p = all.find((x) => (x.id || x.dirName) === selectedId);
     if (p) fillPanel(p);
   }
 }
 
 function updatedLine() {
+  const all = (DATA && DATA.projects) || [];
+  const rangeVal = $('range').value;
+  const days = rangeVal === 'all' ? Infinity : Number(rangeVal);
+  const hidden = isFinite(days)
+    ? all.filter((p) => !p.lastTs || Date.now() - Date.parse(p.lastTs) >= days * 86400e3).length
+    : 0;
   let s = '更新: ' + new Date(DATA.generatedAt).toLocaleTimeString('ja-JP');
+  if (hidden > 0) s = `期間外 ${hidden} 件を非表示 ・ ` + s;
   const bad = (DATA.peers || []).filter((x) => !x.ok);
   if (bad.length) s += ` ・ ⚠ 接続不可: ${bad.map((x) => x.host || x.url).join(', ')}`;
   return s;
@@ -764,6 +798,7 @@ tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+$('range').addEventListener('change', () => { lastRenderKey = null; render(); });
 </script>
 </body>
 </html>

@@ -11,7 +11,15 @@
       "Bash(pkill -f \"node server.js\")",
       "Bash(lsof -ti:4371)",
       "Bash(xargs kill)",
-      "Bash(lsof -ti:4370)"
+      "Bash(lsof -ti:4370)",
+      "Bash(PORT=4371 HOST_LABEL=mac-studio nohup node server.js)",
+      "Bash(PORT=4372 HOST_LABEL=mac-mini nohup node server.js)",
+      "Bash(lsof -ti:4371,4372)",
+      "Bash(nohup node server.js)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:4370/)",
+      "Bash(curl -s http://localhost:4370/api/data)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
