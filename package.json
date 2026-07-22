@@ -1,0 +1,13 @@
+{
+  "name": "ai-agents-view",
+  "version": "0.1.0",
+  "description": "Claude Code / AI エージェントのセッションをアイソメトリック・インフォグラフィック風に可視化するローカルダッシュボード",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

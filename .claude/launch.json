@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ai-agents-view",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "port": 4370
+    }
+  ]
+}

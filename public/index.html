@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Agents View — Claude Code Sessions</title>
+<style>
+  :root {
+    --bg-1: #f5f8fc;
+    --bg-2: #e8eef6;
+    --navy: #1d2b3a;
+    --navy-2: #24384d;
+    --slate: #55677a;
+    --cyan: #2fb9dd;
+    --cyan-glow: #59d2f2;
+    --blue: #3a7bd5;
+    --gray-txt: #8a97a6;
+    --card: #ffffff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Hiragino Sans", "Noto Sans JP", -apple-system, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(1200px 700px at 75% -10%, #ffffff 0%, transparent 60%),
+      linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+    color: var(--navy);
+    overflow: hidden;
+  }
+  #app { position: relative; width: 100vw; height: 100vh; }
+
+  /* ── タイトルカプセル ─────────────────────────── */
+  .title-capsule {
+    position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+    background: linear-gradient(180deg, #5f7185 0%, #4c5e71 100%);
+    color: #fff; font-size: 26px; font-weight: 800; letter-spacing: .04em;
+    padding: 12px 56px; border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(45, 62, 80, .28), inset 0 1px 0 rgba(255,255,255,.25);
+    white-space: nowrap; z-index: 20;
+  }
+  .title-capsule small { display:block; text-align:center; font-size: 11px; font-weight: 600; opacity:.8; letter-spacing:.18em; margin-top:2px; }
+
+  /* ── 統計チップ ──────────────────────────────── */
+  .stats {
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; z-index: 20;
+  }
+  .stat {
+    background: var(--card); border-radius: 14px; padding: 8px 16px;
+    box-shadow: 0 4px 14px rgba(40, 60, 90, .10);
+    text-align: center; min-width: 86px;
+  }
+  .stat .v { font-size: 20px; font-weight: 800; color: var(--navy); line-height: 1.15; }
+  .stat .v.cyan { color: var(--cyan); }
+  .stat .k { font-size: 10px; color: var(--gray-txt); font-weight: 600; letter-spacing: .05em; }
+
+  /* ── 凡例 ────────────────────────────────────── */
+  .legend {
+    position: absolute; left: 26px; bottom: 22px; z-index: 20;
+    background: rgba(255,255,255,.85); backdrop-filter: blur(6px);
+    border-radius: 14px; padding: 12px 16px;
+    box-shadow: 0 4px 14px rgba(40,60,90,.10);
+    font-size: 12px; color: var(--slate);
+  }
+  .legend .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .dot.active { background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
+  .dot.recent { background: var(--blue); }
+  .dot.idle   { background: #b3bfcc; }
+
+  .updated {
+    position: absolute; right: 26px; bottom: 22px; z-index: 20;
+    font-size: 11px; color: var(--gray-txt);
+  }
+
+  /* ── SVG ステージ ───────────────────────────── */
+  #stage { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .node-g { cursor: pointer; }
+  .node-g text { pointer-events: none; }
+
+  @keyframes pulse {
+    0%   { transform: scale(1);   opacity: .55; }
+    70%  { transform: scale(1.5); opacity: 0; }
+    100% { transform: scale(1.5); opacity: 0; }
+  }
+  .pulse-ring { transform-origin: center; transform-box: fill-box; animation: pulse 2.2s ease-out infinite; }
+
+  @keyframes flow { to { stroke-dashoffset: -26; } }
+  .link { fill: none; stroke: var(--cyan); stroke-width: 2.4; stroke-dasharray: 2 11;
+          stroke-linecap: round; animation: flow 1.4s linear infinite; opacity: .8; }
+  .link.idle { stroke: #b9c5d1; animation-duration: 3.2s; opacity: .45; }
+
+  /* 人物・オフィス小物のアニメーション */
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2.6px); } }
+  .bob { animation: bob 1.1s ease-in-out infinite; }
+  @keyframes sway { 0%,100% { transform: rotate(-2.5deg); } 50% { transform: rotate(2.5deg); } }
+  .sway { transform-origin: center bottom; transform-box: fill-box; animation: sway 2.6s ease-in-out infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  .blink  { animation: blink 1.6s ease-in-out infinite; }
+  .blink2 { animation: blink 1.6s ease-in-out infinite; animation-delay: .8s; }
+
+  /* ── 詳細パネル ─────────────────────────────── */
+  .panel {
+    position: absolute; top: 0; right: 0; height: 100%; width: 400px; max-width: 92vw;
+    background: rgba(255,255,255,.96); backdrop-filter: blur(10px);
+    box-shadow: -12px 0 40px rgba(30,45,65,.18);
+    transform: translateX(105%); transition: transform .28s ease;
+    z-index: 30; display: flex; flex-direction: column;
+  }
+  .panel.open { transform: translateX(0); }
+  .panel-head {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%);
+    color: #fff; padding: 22px 22px 18px;
+  }
+  .panel-head .pj { font-size: 20px; font-weight: 800; word-break: break-all; }
+  .panel-head .pth { font-size: 11px; opacity: .65; margin-top: 4px; word-break: break-all; }
+  .panel-head .close {
+    position: absolute; top: 14px; right: 14px; width: 30px; height: 30px;
+    border: none; border-radius: 50%; background: rgba(255,255,255,.15); color: #fff;
+    font-size: 15px; cursor: pointer;
+  }
+  .panel-head .badges { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+    background: rgba(255,255,255,.14);
+  }
+  .badge.on { background: var(--cyan); color: #06303c; }
+  .panel-body { flex: 1; overflow-y: auto; padding: 16px 18px 24px; }
+  .sec-title { font-size: 12px; font-weight: 800; color: var(--gray-txt); letter-spacing: .1em; margin: 14px 0 8px; }
+
+  .runs { background: #f2f6fa; border-radius: 12px; padding: 12px; }
+  .runs svg { display: block; width: 100%; }
+
+  .sess {
+    background: var(--card); border: 1px solid #e4eaf1; border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px;
+    box-shadow: 0 2px 8px rgba(40,60,90,.05);
+  }
+  .sess .t { display: flex; align-items: flex-start; gap: 8px; }
+  .sess .t .dot { margin-top: 4px; }
+  .sess .name { font-size: 13.5px; font-weight: 700; line-height: 1.4; flex: 1; }
+  .sess .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip {
+    font-size: 10.5px; font-weight: 600; color: var(--slate);
+    background: #eef3f8; border-radius: 999px; padding: 3px 9px;
+  }
+  .chip.model { background: #e2f5fb; color: #16758f; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tool { font-size: 10.5px; font-family: ui-monospace, "SF Mono", monospace;
+          background: var(--navy); color: #cfe9f5; border-radius: 6px; padding: 3px 8px; }
+  .empty { color: var(--gray-txt); font-size: 13px; text-align: center; padding: 30px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="title-capsule">AI Agents View<small>CLAUDE CODE SESSION MONITOR</small></div>
+
+  <svg id="stage" preserveAspectRatio="xMidYMid meet"></svg>
+
+  <div class="legend">
+    <div class="row"><span class="dot active"></span>稼働中 — 着席して作業中</div>
+    <div class="row"><span class="dot recent"></span>直近1時間 — デスク横で待機</div>
+    <div class="row"><span class="dot idle"></span>待機中 — 空席</div>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div class="updated" id="updated"></div>
+
+  <div class="panel" id="panel">
+    <div class="panel-head" style="position:relative">
+      <button class="close" onclick="closePanel()">✕</button>
+      <div class="pj" id="p-name"></div>
+      <div class="pth" id="p-path"></div>
+      <div class="badges" id="p-badges"></div>
+    </div>
+    <div class="panel-body" id="p-body"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const $ = (id) => document.getElementById(id);
+
+let DATA = null;
+let selectedId = null;
+
+/* ══════════ ユーティリティ ══════════ */
+function el(name, attrs = {}, children = []) {
+  const e = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  for (const c of children) e.appendChild(c);
+  return e;
+}
+function txt(e, s) { e.textContent = s; return e; }
+function fmtNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const d = (Date.now() - Date.parse(ts)) / 1000;
+  if (d < 60) return 'たった今';
+  if (d < 3600) return Math.floor(d / 60) + '分前';
+  if (d < 86400) return Math.floor(d / 3600) + '時間前';
+  return Math.floor(d / 86400) + '日前';
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ══════════ アイソメトリック投影 ══════════ */
+const VIEW = { w: 1400, h: 860 };
+const PLATE = { cx: 700, cy: 465, w: 960, h: 480 };
+// (u,v) ∈ [0,1]² → 画面座標 / (0,0)=手前, (1,1)=奥
+function iso(u, v) {
+  return {
+    x: PLATE.cx + (u - v) * PLATE.w / 2,
+    y: PLATE.cy + (1 - u - v) * PLATE.h / 2,
+  };
+}
+
+/* ══════════ 低レベル描画部品 ══════════ */
+// アイソメの直方体。A=(1,.5) 方向に la、B=(1,-.5) 方向に lb、高さ h
+function isoBox(cx, cy, la, lb, h, colTop, colL, colR, attrs = {}) {
+  const p0 = [cx - (la + lb) / 2, cy - (la - lb) / 4];
+  const p1 = [p0[0] + la, p0[1] + la / 2];
+  const p2 = [p1[0] + lb, p1[1] - lb / 2];
+  const p3 = [p0[0] + lb, p0[1] - lb / 2];
+  const up = (p) => [p[0], p[1] - h];
+  const T = [p0, p1, p2, p3].map(up);
+  const d = (pts) => 'M' + pts.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L') + ' Z';
+  const g = el('g', attrs);
+  g.appendChild(el('path', { d: d([T[0], T[1], p1, p0]), fill: colL }));
+  g.appendChild(el('path', { d: d([T[1], T[2], p2, p1]), fill: colR }));
+  g.appendChild(el('path', { d: d(T), fill: colTop }));
+  return g;
+}
+
+// 床タイル(ひし形)。中心 (0,0)、半幅 w・半高 hh
+function tilePath(w, hh) {
+  return `M${-w},0 L0,${-hh} L${w},0 L0,${hh} Z`;
+}
+
+/* 人物(足元が原点)。pose: 'stand' | 'work' | 'present' */
+function person(opts = {}) {
+  const {
+    pose = 'stand', suit = '#2c4157', shirt = '#d9e9f4',
+    skin = '#f2c9a2', hair = '#26343f', flip = false, anim = null,
+  } = opts;
+  const outer = el('g', { transform: flip ? 'scale(-1,1)' : '' });
+  const g = el('g', anim ? { class: anim } : {});
+  outer.appendChild(el('ellipse', { cx: 0, cy: 1.5, rx: 10, ry: 3.2, fill: '#31424f', opacity: .16 }));
+
+  // 脚
+  if (pose === 'stand' || pose === 'present') {
+    g.appendChild(el('rect', { x: -5.5, y: -17, width: 4.6, height: 17, rx: 2, fill: '#232f3c' }));
+    g.appendChild(el('rect', { x: 1, y: -17, width: 4.6, height: 17, rx: 2, fill: '#2b3947' }));
+  } else if (pose === 'work') {
+    // 着席(脚は椅子と一体で簡略化)
+    g.appendChild(el('rect', { x: -7, y: -14, width: 14, height: 9, rx: 3, fill: '#232f3c' }));
+  }
+  // 胴体(スーツ)
+  g.appendChild(el('path', {
+    d: 'M-8,-37 Q0,-41.5 8,-37 L6.6,-15.5 L-6.6,-15.5 Z', fill: suit,
+  }));
+  // シャツ襟元
+  g.appendChild(el('path', { d: 'M-2.6,-37.5 L0,-30.5 L2.6,-37.5 Z', fill: shirt }));
+  // 腕
+  if (pose === 'present') {
+    g.appendChild(el('path', { d: 'M-7,-35 C-10,-30 -10.5,-24 -9.5,-19', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    g.appendChild(el('path', { d: 'M7,-35 C12,-37 16,-40 19,-43', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    g.appendChild(el('circle', { cx: 20, cy: -44, r: 2.4, fill: skin }));
+  } else if (pose === 'work') {
+    g.appendChild(el('path', { d: 'M-7,-34 C-10,-30 -9,-26 -5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    g.appendChild(el('path', { d: 'M7,-34 C10,-30 9,-26 5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+  } else {
+    g.appendChild(el('path', { d: 'M-7.5,-35 C-10,-29 -10.5,-23 -9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    g.appendChild(el('path', { d: 'M7.5,-35 C10,-29 10.5,-23 9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+  }
+  // 頭・髪
+  g.appendChild(el('circle', { cx: 0, cy: -45.5, r: 6.2, fill: skin }));
+  g.appendChild(el('path', { d: 'M-6.2,-46.5 a6.2,6.2 0 0 1 12.4,0 l-1.5,1 a5,4.6 0 0 0 -9.4,0 Z', fill: hair }));
+  outer.appendChild(g);
+  return outer;
+}
+
+/* ワークステーション(デスク+モニター+人物) */
+function workstation(p) {
+  const g = el('g', { class: 'node-g' });
+  const active = p.status === 'active';
+  const recent = p.status === 'recent';
+
+  // 床タイル
+  g.appendChild(el('path', {
+    d: tilePath(72, 36),
+    fill: active ? '#ddf2fa' : '#e4eaf2',
+    stroke: active ? '#8fdcf2' : '#ffffff', 'stroke-width': 2.5,
+  }));
+  if (active) {
+    g.appendChild(el('ellipse', {
+      cx: 0, cy: 0, rx: 66, ry: 33, fill: 'none',
+      stroke: 'var(--cyan)', 'stroke-width': 3, class: 'pulse-ring',
+    }));
+  }
+
+  // 人物(デスクの奥 = 先に描いて脚を隠す)
+  if (active) {
+    const pw = person({ pose: 'work', suit: '#20536b', shirt: '#bfeaf7', anim: 'bob' });
+    pw.setAttribute('transform', 'translate(14,-30) scale(1.05)');
+    g.appendChild(pw);
+  } else if (recent) {
+    const ps = person({ pose: 'stand', suit: '#31567d' });
+    ps.setAttribute('transform', 'translate(-52,4) scale(1.02)');
+    g.appendChild(ps);
+  }
+
+  // サブエージェント: 実行中の数だけデスクに集まる(奥側の1人はデスク前に描く)
+  const nAgents = p.runningAgents || 0;
+  const AGENT_SPOTS = [
+    { x: -58, y: 10, flip: false, back: false },
+    { x: 58,  y: 18, flip: true,  back: false },
+    { x: -34, y: -34, flip: false, back: true },
+    { x: 44,  y: 40, flip: true,  back: false },
+  ];
+  const AGENT_SUITS = ['#3a6186', '#476383', '#24486b', '#31567d'];
+  const agentsShown = Math.min(nAgents, AGENT_SPOTS.length);
+  for (let i = 0; i < agentsShown; i++) {
+    const sp = AGENT_SPOTS[i];
+    if (!sp.back) continue; // 手前側はデスクの後に描く
+    const pa = person({ pose: 'stand', suit: AGENT_SUITS[i], anim: 'bob', flip: sp.flip });
+    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
+    g.appendChild(pa);
+  }
+
+  // デスク
+  g.appendChild(isoBox(0, -4, 52, 30, 22, '#eef2f8', '#c3cedb', '#aebbca'));
+
+  for (let i = 0; i < agentsShown; i++) {
+    const sp = AGENT_SPOTS[i];
+    if (sp.back) continue;
+    const pa = person({ pose: 'stand', suit: AGENT_SUITS[i], anim: 'bob', flip: sp.flip });
+    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
+    g.appendChild(pa);
+  }
+
+  // モニター(スクリーンは手前向き)
+  const scr = el('g', { transform: 'translate(-14,-26)' });
+  scr.appendChild(el('path', { d: 'M-15,-1 L11,-14 L11,-36 L-15,-23 Z', fill: '#24384d' }));
+  scr.appendChild(el('path', {
+    d: 'M-12,-5 L8,-15 L8,-32 L-12,-22 Z',
+    fill: active ? '#59d2f2' : (recent ? '#9fc6e8' : '#46586b'),
+    filter: active ? 'url(#glow)' : '',
+  }));
+  if (active) { // 画面のコード行
+    scr.appendChild(el('path', { d: 'M-9,-11 l10,-5 M-9,-15 l14,-7 M-9,-19 l8,-4', stroke: '#0f5468', 'stroke-width': 1.6, 'stroke-linecap': 'round', class: 'blink' }));
+  }
+  g.appendChild(scr);
+  // キーボード
+  g.appendChild(el('path', { d: 'M-8,-22 l14,-7 l10,5 l-14,7 Z', fill: '#d6dfe9' }));
+
+  // ネームプレート
+  const short = p.name.length > 12 ? p.name.slice(0, 11) + '…' : p.name;
+  const wpx = Math.max(p.remote ? 130 : 86, short.length * 11 + 30);
+  const plate = el('g', { transform: 'translate(0,46)' });
+  plate.appendChild(el('rect', {
+    x: -wpx / 2, y: -14, width: wpx, height: 30, rx: 9,
+    fill: '#1d2b3a', stroke: active ? '#59d2f2' : 'none', 'stroke-width': 2,
+    filter: 'url(#soft)',
+  }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, short);
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#8fa5b8', 'font-size': 9.5 });
+  txt(t2, (p.remote ? `@${p.host} ・ ` : '')
+    + `${p.sessionCount} session${p.sessionCount > 1 ? 's' : ''} ・ ${timeAgo(p.lastTs)}`
+    + (nAgents ? ` ・ 🤖×${nAgents}` : ''));
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
+/* 中央ミーティングテーブル */
+function meetingTable() {
+  const g = el('g');
+  // ラグ
+  g.appendChild(el('path', { d: tilePath(120, 60), fill: '#e0f2f9', stroke: '#c3e7f3', 'stroke-width': 2, opacity: .85 }));
+  // 奥の人物
+  const pb = person({ pose: 'present', suit: '#2c4157', flip: true });
+  pb.setAttribute('transform', 'translate(46,-38) scale(1.0)');
+  g.appendChild(pb);
+  // テーブル(円柱)
+  const tb = el('g', { transform: 'translate(0,-6)' });
+  tb.appendChild(el('path', { d: 'M-40,-18 A40,20 0 0 0 40,-18 L40,-30 A40,20 0 0 1 -40,-30 Z', fill: '#c9d5e2' }));
+  tb.appendChild(el('ellipse', { cx: 0, cy: -30, rx: 40, ry: 20, fill: '#f2f6fa', stroke: '#fff', 'stroke-width': 2.5 }));
+  // ノートPC
+  tb.appendChild(el('path', { d: 'M-14,-32 l12,-6 l10,5 l-12,6 Z', fill: '#2c4157' }));
+  tb.appendChild(el('path', { d: 'M-14,-32 l-1,-9 l12,-6 l1,9 Z', fill: '#59d2f2' }));
+  g.appendChild(tb);
+  // 手前の人物
+  const pf = person({ pose: 'stand', suit: '#24486b' });
+  pf.setAttribute('transform', 'translate(-58,20) scale(1.05)');
+  g.appendChild(pf);
+  const pf2 = person({ pose: 'stand', suit: '#2c4157', flip: true });
+  pf2.setAttribute('transform', 'translate(56,26) scale(1.05)');
+  g.appendChild(pf2);
+  return g;
+}
+
+/* ホワイトボード+プレゼン */
+function whiteboard() {
+  const g = el('g');
+  g.appendChild(el('path', { d: tilePath(62, 31), fill: '#e4eaf2', stroke: '#fff', 'stroke-width': 2, opacity: .9 }));
+  // ボード(脚+板)
+  const b = el('g', { transform: 'translate(6,-6)' });
+  b.appendChild(el('path', { d: 'M-26,4 l0,-12 M22,-20 l0,-12', stroke: '#8b99a8', 'stroke-width': 3 }));
+  b.appendChild(el('path', { d: 'M-32,-6 L28,-36 L28,-74 L-32,-44 Z', fill: '#fdfeff', stroke: '#94a3b2', 'stroke-width': 2.5 }));
+  // ボード上のチャート
+  b.appendChild(el('path', { d: 'M-24,-22 l0,-10 M-16,-26 l0,-14 M-8,-30 l0,-11 M0,-34 l0,-17', stroke: '#2fb9dd', 'stroke-width': 5, 'stroke-linecap': 'round' }));
+  b.appendChild(el('path', { d: 'M8,-44 L22,-58', stroke: '#2c4157', 'stroke-width': 2.5, 'stroke-linecap': 'round' }));
+  g.appendChild(b);
+  // プレゼンター+聞き手
+  const pp = person({ pose: 'present', suit: '#2c4157' });
+  pp.setAttribute('transform', 'translate(-58,16) scale(1.02)');
+  g.appendChild(pp);
+  const pl = person({ pose: 'stand', suit: '#3a6186', flip: true });
+  pl.setAttribute('transform', 'translate(-14,48) scale(1.0)');
+  g.appendChild(pl);
+  return g;
+}
+
+/* サーバーラック(~/.claude データの象徴) */
+function serverRack() {
+  const g = el('g');
+  g.appendChild(el('path', { d: tilePath(56, 28), fill: '#e4eaf2', stroke: '#fff', 'stroke-width': 2, opacity: .9 }));
+  g.appendChild(isoBox(0, -2, 30, 24, 58, '#3d5266', '#24384d', '#1a2836'));
+  // 前面ランプ
+  g.appendChild(el('path', { d: 'M-22,-18 l9,4.5 M-22,-30 l9,4.5 M-22,-42 l9,4.5', stroke: '#59d2f2', 'stroke-width': 3, 'stroke-linecap': 'round', class: 'blink' }));
+  g.appendChild(el('path', { d: 'M-8,-11 l9,4.5 M-8,-23 l9,4.5 M-8,-35 l9,4.5', stroke: '#35d07f', 'stroke-width': 3, 'stroke-linecap': 'round', class: 'blink2' }));
+  const cap = el('text', { x: 0, y: 46, 'text-anchor': 'middle', fill: '#66788b', 'font-size': 10.5, 'font-weight': 600 });
+  txt(cap, '~/.claude/projects');
+  g.appendChild(cap);
+  return g;
+}
+
+/* 観葉植物 */
+function plant() {
+  const g = el('g');
+  g.appendChild(el('ellipse', { cx: 0, cy: 2, rx: 14, ry: 5, fill: '#31424f', opacity: .14 }));
+  g.appendChild(isoBox(0, -2, 14, 14, 12, '#c9d5e2', '#a9b7c6', '#93a3b4'));
+  const lv = el('g', { class: 'sway' });
+  lv.appendChild(el('path', { d: 'M0,-14 C-3,-26 -14,-30 -18,-40 C-6,-38 -2,-30 0,-24 C2,-32 8,-40 18,-42 C14,-30 6,-26 2,-16 Z', fill: '#5aa982' }));
+  lv.appendChild(el('path', { d: 'M0,-16 C-1,-28 -4,-38 -2,-48 C4,-40 4,-28 2,-16 Z', fill: '#79c29a' }));
+  g.appendChild(lv);
+  return g;
+}
+
+/* コーヒーコーナー */
+function coffeeCorner() {
+  const g = el('g');
+  g.appendChild(el('path', { d: tilePath(52, 26), fill: '#e4eaf2', stroke: '#fff', 'stroke-width': 2, opacity: .9 }));
+  g.appendChild(isoBox(-6, -2, 34, 22, 20, '#eef2f8', '#c3cedb', '#aebbca'));
+  // コーヒーマシン
+  g.appendChild(isoBox(-6, -21, 12, 10, 16, '#3d5266', '#24384d', '#1a2836'));
+  // 湯気
+  g.appendChild(el('path', { d: 'M6,-46 q3,-4 0,-8 q-3,-4 0,-8', stroke: '#b9c5d1', 'stroke-width': 2, fill: 'none', 'stroke-linecap': 'round', class: 'blink' }));
+  // 休憩中の人
+  const pc = person({ pose: 'stand', suit: '#476383', flip: true });
+  pc.setAttribute('transform', 'translate(40,14) scale(.98)');
+  g.appendChild(pc);
+  return g;
+}
+
+/* ══════════ フロア(プレート) ══════════ */
+function buildDefs() {
+  const defs = el('defs');
+  defs.innerHTML = `
+    <linearGradient id="plateTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdfeff"/><stop offset="1" stop-color="#e7edf4"/>
+    </linearGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#2d3e50" flood-opacity="0.22"/>
+    </filter>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#35c3e8" flood-opacity="0.85"/>
+    </filter>
+  `;
+  return defs;
+}
+
+function buildPlate() {
+  const g = el('g');
+  const A = iso(0, 0), B = iso(1, 0), C = iso(1, 1), D = iso(0, 1);
+  const TH = 18;
+
+  // 側面(厚み)
+  g.appendChild(el('path', {
+    d: `M${D.x},${D.y} L${A.x},${A.y} L${A.x},${A.y + TH} L${D.x},${D.y + TH} Z`, fill: '#c6d0dc',
+  }));
+  g.appendChild(el('path', {
+    d: `M${A.x},${A.y} L${B.x},${B.y} L${B.x},${B.y + TH} L${A.x},${A.y + TH} Z`, fill: '#d4dde7',
+  }));
+  // 天面
+  g.appendChild(el('path', {
+    d: `M${A.x},${A.y} L${B.x},${B.y} L${C.x},${C.y} L${D.x},${D.y} Z`,
+    fill: 'url(#plateTop)', stroke: '#ffffff', 'stroke-width': 3, filter: 'url(#soft)',
+  }));
+  // 床タイルグリッド
+  for (let i = 1; i < 8; i++) {
+    const t = i / 8;
+    const p1 = iso(t, 0), p2 = iso(t, 1), p3 = iso(0, t), p4 = iso(1, t);
+    g.appendChild(el('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, stroke: '#dde4ed', 'stroke-width': 1.2 }));
+    g.appendChild(el('line', { x1: p3.x, y1: p3.y, x2: p4.x, y2: p4.y, stroke: '#dde4ed', 'stroke-width': 1.2 }));
+  }
+  return g;
+}
+
+/* ══════════ レイアウト ══════════ */
+// デスクの配置スロット。中央 (.5,.5) はミーティングテーブル
+// 4台まで: 風車型 / 5〜8台: 2列のオフィスレイアウト / それ以上: 外周リング
+const SLOTS_4 = [
+  [.32, .18], [.82, .32], [.18, .68], [.70, .90],
+];
+const SLOTS_8 = [
+  [.36, .26], [.62, .26], [.10, .26], [.88, .26],
+  [.62, .78], [.36, .78], [.10, .78], [.88, .78],
+];
+function layoutProjects(projects) {
+  const n = projects.length;
+  const slots = n <= 4 ? SLOTS_4 : SLOTS_8;
+  const placed = [];
+  projects.forEach((p, i) => {
+    let u, v;
+    if (i < slots.length) { [u, v] = slots[i]; }
+    else { // 予備: 外周リングに配置
+      const a = (i - slots.length) / Math.max(1, n - slots.length) * Math.PI * 2;
+      u = .5 + Math.cos(a) * .38; v = .5 + Math.sin(a) * .38;
+    }
+    placed.push({ p, u, v });
+  });
+  return placed;
+}
+
+/* ══════════ 描画 ══════════ */
+function render() {
+  if (!DATA) return;
+  const svg = $('stage');
+  svg.setAttribute('viewBox', `0 0 ${VIEW.w} ${VIEW.h}`);
+  svg.innerHTML = '';
+  svg.appendChild(buildDefs());
+  svg.appendChild(buildPlate());
+
+  const projects = DATA.projects || [];
+  const placed = layoutProjects(projects);
+  const hub = iso(.5, .5);
+
+  // 接続線(家具より下のレイヤー)
+  const linkLayer = el('g');
+  svg.appendChild(linkLayer);
+  for (const { p, u, v } of placed) {
+    const pt = iso(u, v);
+    const mx = (pt.x + hub.x) / 2, my = (pt.y + hub.y) / 2 - 20;
+    linkLayer.appendChild(el('path', {
+      d: `M${pt.x},${pt.y} Q${mx},${my} ${hub.x},${hub.y}`,
+      class: 'link' + (p.status === 'idle' ? ' idle' : ''),
+    }));
+  }
+
+  // シーンアイテムを奥→手前の順に描画(ペインターアルゴリズム)
+  const items = [];
+
+  // デスクが多いときはスペースを空けるため装飾を間引く
+  const deco = projects.length <= 4 ? [
+    { u: .46, v: .94, build: whiteboard },
+    { u: .88, v: .72, build: serverRack },
+    { u: .13, v: .34, build: coffeeCorner },
+    { u: .07, v: .93, build: plant },
+    { u: .93, v: .93, build: plant },
+    { u: .07, v: .07, build: plant },
+    { u: .93, v: .07, build: plant },
+  ] : [
+    { u: .46, v: .94, build: whiteboard },
+    { u: .93, v: .93, build: serverRack },
+    { u: .07, v: .93, build: plant },
+    { u: .07, v: .07, build: plant },
+    { u: .93, v: .07, build: plant },
+  ];
+  for (const d of deco) {
+    const pt = iso(d.u, d.v);
+    const g = d.build();
+    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    items.push({ y: pt.y, el: g });
+  }
+
+  { // 中央ミーティングテーブル
+    const g = meetingTable();
+    g.setAttribute('transform', `translate(${hub.x},${hub.y})`);
+    items.push({ y: hub.y, el: g });
+  }
+
+  for (const { p, u, v } of placed) {
+    const pt = iso(u, v);
+    const g = workstation(p);
+    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    // click だと再描画とマウス操作が競合して不発になることがあるため pointerdown
+    g.addEventListener('pointerdown', () => openPanel(p.id || p.dirName));
+    items.push({ y: pt.y, el: g });
+  }
+
+  items.sort((a, b) => a.y - b.y);
+  for (const it of items) svg.appendChild(it.el);
+
+  renderStats(projects);
+  $('updated').textContent = updatedLine();
+
+  if (selectedId) {
+    const p = projects.find((x) => (x.id || x.dirName) === selectedId);
+    if (p) fillPanel(p);
+  }
+}
+
+function updatedLine() {
+  let s = '更新: ' + new Date(DATA.generatedAt).toLocaleTimeString('ja-JP');
+  const bad = (DATA.peers || []).filter((x) => !x.ok);
+  if (bad.length) s += ` ・ ⚠ 接続不可: ${bad.map((x) => x.host || x.url).join(', ')}`;
+  return s;
+}
+
+function renderStats(projects) {
+  const active = projects.filter((p) => p.status === 'active').length;
+  const sessions = projects.reduce((a, p) => a + p.sessionCount, 0);
+  const tools = projects.reduce((a, p) => a + p.totalToolCalls, 0);
+  const out = projects.reduce((a, p) => a + p.outputTokens, 0);
+  const hosts = new Set(projects.map((p) => p.host).filter(Boolean)).size;
+  $('stats').innerHTML = `
+    ${hosts > 1 ? `<div class="stat"><div class="v">${hosts}</div><div class="k">ホスト</div></div>` : ''}
+    <div class="stat"><div class="v">${projects.length}</div><div class="k">プロジェクト</div></div>
+    <div class="stat"><div class="v cyan">${active}</div><div class="k">稼働中</div></div>
+    <div class="stat"><div class="v">${sessions}</div><div class="k">セッション</div></div>
+    <div class="stat"><div class="v">${fmtNum(tools)}</div><div class="k">ツール実行</div></div>
+    <div class="stat"><div class="v">${fmtNum(out)}</div><div class="k">出力トークン</div></div>`;
+}
+
+/* ══════════ 詳細パネル ══════════ */
+function openPanel(id) {
+  selectedId = id;
+  const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
+  if (!p) return;
+  fillPanel(p);
+  $('panel').classList.add('open');
+}
+function closePanel() {
+  selectedId = null;
+  $('panel').classList.remove('open');
+}
+
+function fillPanel(p) {
+  $('p-name').textContent = p.name + (p.remote ? `  💻 ${p.host}` : '');
+  $('p-path').textContent = (p.remote ? `${p.host}: ` : '') + (p.cwd || p.dirName);
+  const stLabel = { active: '稼働中', recent: '直近実行', idle: '待機中' }[p.status];
+  $('p-badges').innerHTML = `
+    <span class="badge ${p.status === 'active' ? 'on' : ''}">● ${stLabel}</span>
+    <span class="badge">${p.sessionCount} セッション</span>
+    <span class="badge">🔧 ${fmtNum(p.totalToolCalls)}</span>
+    <span class="badge">⚡ ${fmtNum(p.outputTokens)} tok</span>`;
+
+  let html = '';
+  html += '<div class="sec-title">実行タイムライン(直近30日)</div>';
+  html += `<div class="runs">${runsTimeline(p)}</div>`;
+  html += `<div class="sec-title">セッション一覧</div>`;
+  for (const s of p.sessions) {
+    const toolEntries = Object.entries(s.toolCalls).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    html += `
+    <div class="sess">
+      <div class="t">
+        <span class="dot ${s.status}"></span>
+        <div class="name">${esc(s.title || s.firstPrompt || s.sessionId.slice(0, 8))}</div>
+      </div>
+      <div class="meta">
+        <span class="chip">${timeAgo(s.lastTs)}</span>
+        ${s.model ? `<span class="chip model">${esc(s.model)}</span>` : ''}
+        ${s.gitBranch ? `<span class="chip">⎇ ${esc(s.gitBranch)}</span>` : ''}
+        <span class="chip">💬 ${s.userMessages + s.assistantMessages}</span>
+        <span class="chip">⚡ ${fmtNum(s.outputTokens)} tok</span>
+        ${s.totalAgents ? `<span class="chip" style="background:#e2f5fb;color:#16758f">🤖 ${s.totalAgents} agents${s.runningAgents ? `(稼働 ${s.runningAgents})` : ''}</span>` : ''}
+      </div>
+      ${(s.agents || []).filter((a) => a.running).map((a) =>
+        `<div style="font-size:10.5px;color:#16758f;margin-top:6px">▶ ${esc(a.agentType || 'agent')}: ${esc((a.description || '').slice(0, 40))}</div>`).join('')}
+      ${toolEntries.length ? `<div class="tools">${toolEntries.map(([n, c]) => `<span class="tool">${esc(n)}×${c}</span>`).join('')}</div>` : ''}
+    </div>`;
+  }
+  if (!p.sessions.length) html += '<div class="empty">セッションがありません</div>';
+  $('p-body').innerHTML = html;
+}
+
+/** 直近30日の実行状況(SVG文字列) */
+function runsTimeline(p) {
+  const W = 340, H = 74, days = 30;
+  const now = Date.now();
+  const t0 = now - days * 86400e3;
+  const daily = new Array(days).fill(0);
+  for (const s of p.sessions) {
+    for (const [h, c] of Object.entries(s.hourly)) {
+      const t = Date.parse(h + ':00:00Z');
+      if (t >= t0) {
+        const idx = Math.min(days - 1, Math.floor((t - t0) / 86400e3));
+        daily[idx] += c;
+      }
+    }
+  }
+  const max = Math.max(1, ...daily);
+  const bw = W / days;
+  let bars = '';
+  for (let i = 0; i < days; i++) {
+    const hgt = daily[i] ? Math.max(3, (daily[i] / max) * (H - 26)) : 0;
+    if (!hgt) continue;
+    const recent = i >= days - 2;
+    bars += `<rect x="${(i * bw + 1).toFixed(1)}" y="${(H - 18 - hgt).toFixed(1)}"
+      width="${(bw - 2).toFixed(1)}" height="${hgt.toFixed(1)}" rx="2"
+      fill="${recent ? '#2fb9dd' : '#8fb3cc'}"/>`;
+  }
+  let marks = '';
+  for (const s of p.sessions) {
+    if (!s.firstTs) continue;
+    const t = Date.parse(s.firstTs);
+    if (t < t0) continue;
+    const x = ((t - t0) / (days * 86400e3)) * W;
+    marks += `<path d="M${x.toFixed(1)},${H - 10} l4,5 l-4,5 l-4,-5 Z" fill="#1d2b3a"/>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H + 6}">
+    <line x1="0" y1="${H - 18}" x2="${W}" y2="${H - 18}" stroke="#c9d4df" stroke-width="1"/>
+    ${bars}${marks}
+    <text x="0" y="${H + 4}" font-size="9" fill="#8a97a6">30日前</text>
+    <text x="${W}" y="${H + 4}" font-size="9" fill="#8a97a6" text-anchor="end">今日</text>
+  </svg>
+  <div style="font-size:10.5px;color:#8a97a6;margin-top:6px">棒: アクティビティ量 / ◆: セッション開始</div>`;
+}
+
+/* ══════════ データ取得ループ ══════════ */
+let lastRenderKey = null;
+let lastRenderMs = 0;
+async function tick() {
+  try {
+    const r = await fetch('/api/data');
+    DATA = await r.json();
+    // データが変わった時だけ再描画(アニメーションのリセットとクリック競合を防ぐ)。
+    // 経過時間表示の更新のため60秒ごとには必ず描画する。
+    const key = JSON.stringify(DATA.projects);
+    const now = Date.now();
+    if (key !== lastRenderKey || now - lastRenderMs > 60e3) {
+      lastRenderKey = key;
+      lastRenderMs = now;
+      render();
+    } else {
+      $('updated').textContent = '更新: ' + new Date(DATA.generatedAt).toLocaleTimeString('ja-JP');
+    }
+  } catch (e) {
+    $('updated').textContent = '接続エラー: サーバーを確認してください';
+  }
+}
+tick();
+setInterval(tick, 3000);
+window.addEventListener('resize', () => render());
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+</script>
+</body>
+</html>

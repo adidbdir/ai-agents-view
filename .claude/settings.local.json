@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(ls ~/.claude/projects/ 2>/dev/null | head -20; echo \"---\"; ls -lt ~/.claude/projects/*/ 2>/dev/null | head -30)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s localhost:4370/api/data)",
+      "Bash(PORT=4371 HOST_LABEL=mac-studio node server.js)",
+      "Bash(curl -s \"localhost:4370/api/data\")",
+      "Bash(pkill -f \"PORT=4371\")",
+      "Bash(pkill -f \"node server.js\")",
+      "Bash(lsof -ti:4371)",
+      "Bash(xargs kill)",
+      "Bash(lsof -ti:4370)"
+    ]
+  }
+}

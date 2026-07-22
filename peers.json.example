@@ -1,0 +1,6 @@
+{
+  "peers": [
+    "other-pc=http://other-pc.local:4370",
+    "mac-mini=http://100.64.0.12:4370"
+  ]
+}
