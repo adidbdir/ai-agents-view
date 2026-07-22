@@ -12,6 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { spawn } = require('child_process');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4370;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -299,21 +300,89 @@ const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https:/
 const CRED_PATH = path.join(__dirname, 'google-credentials.json');
 const TOKEN_PATH = path.join(__dirname, 'google-token.json');
 
-/* 秘書アシスタント(Anthropic API)の設定。
- * 環境変数 ANTHROPIC_API_KEY / SECRETARY_MODEL、または anthropic-credentials.json
- *   { "apiKey": "sk-ant-...", "model": "claude-..." }
- * 未設定でも動作する(定型ブリーフィングにフォールバック)。 */
+/* 秘書アシスタントの設定。3つの動作モードを自動選択する:
+ *   - 'api': Anthropic API キー(従量課金)。環境変数 ANTHROPIC_API_KEY か
+ *            anthropic-credentials.json の { "apiKey": "sk-ant-..." }。
+ *   - 'cli': この PC の Claude Code CLI をヘッドレス実行(サブスクのログインを使用)。
+ *            API キーが無く claude コマンドがあれば自動で使う。
+ *   - 'off': どちらも無い → 定型ブリーフィングにフォールバック(無料)。
+ * provider を明示するには SECRETARY_PROVIDER=api|cli|auto|off または設定ファイルの "provider"。 */
 const ANTHROPIC_CRED_PATH = path.join(__dirname, 'anthropic-credentials.json');
 const DEFAULT_SECRETARY_MODEL = 'claude-haiku-4-5-20251001';
-function loadAnthropicConfig() {
+
+function resolveClaudeCli(pref) {
+  const list = [
+    pref, process.env.CLAUDE_CLI_PATH,
+    path.join(os.homedir(), '.local/bin/claude'),
+    '/opt/homebrew/bin/claude', '/usr/local/bin/claude',
+  ].filter(Boolean);
+  for (const p of list) { try { if (fs.existsSync(p)) return p; } catch { /* ignore */ } }
+  return null;
+}
+
+function loadSecretaryConfig() {
   let apiKey = process.env.ANTHROPIC_API_KEY || null;
   let model = process.env.SECRETARY_MODEL || null;
+  let provider = process.env.SECRETARY_PROVIDER || null;
+  let cliPref = process.env.CLAUDE_CLI_PATH || null;
   try {
     const j = JSON.parse(fs.readFileSync(ANTHROPIC_CRED_PATH, 'utf8'));
     if (!apiKey && j.apiKey) apiKey = j.apiKey;
     if (!model && j.model) model = j.model;
+    if (!provider && j.provider) provider = j.provider;
+    if (!cliPref && j.cliPath) cliPref = j.cliPath;
   } catch { /* 未設定 */ }
-  return { apiKey, model: model || DEFAULT_SECRETARY_MODEL };
+  model = model || DEFAULT_SECRETARY_MODEL;
+  const cli = resolveClaudeCli(cliPref);
+  provider = provider || 'auto';
+  let mode;
+  if (provider === 'off') mode = 'off';
+  else if (provider === 'api') mode = apiKey ? 'api' : 'off';
+  else if (provider === 'cli') mode = cli ? 'cli' : 'off';
+  else mode = apiKey ? 'api' : (cli ? 'cli' : 'off'); // auto
+  return { mode, apiKey, model, cli };
+}
+
+/** 会話履歴を CLI 用の単一プロンプト文字列に平坦化する */
+function flattenForCli(messages) {
+  const hist = messages.slice(0, -1)
+    .map((m) => `${m.role === 'user' ? 'ユーザー' : '秘書'}: ${m.content}`).join('\n');
+  const last = messages[messages.length - 1].content;
+  return (hist ? `これまでの会話:\n${hist}\n\n` : '') + `ユーザー: ${last}`;
+}
+
+/** Claude Code CLI をヘッドレス(-p)で実行して応答テキストを返す */
+function runClaudeCli({ cli, model, system, prompt }) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-p', prompt,
+      '--model', model,
+      '--system-prompt', system,
+      '--output-format', 'json',
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      // 純粋な相談用途なのでツール類は無効化(高速化・安全)
+      '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'WebFetch', 'WebSearch', 'Task', 'Glob', 'Grep',
+    ];
+    let child;
+    try {
+      child = spawn(cli || 'claude', args, { env: process.env, cwd: os.tmpdir() });
+    } catch (e) { reject(new Error('起動失敗: ' + e.message)); return; }
+    let out = '', err = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('タイムアウト(60秒)')); }, 60e3);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(timer); reject(new Error('起動失敗: ' + e.message)); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const j = JSON.parse(out);
+        if (j.is_error) return reject(new Error(String(j.result || 'CLI エラー').slice(0, 160)));
+        resolve(String(j.result || '').trim());
+      } catch {
+        reject(new Error((err || out || '応答なし').slice(0, 160)));
+      }
+    });
+  });
 }
 
 function loadGoogleCreds() {
@@ -672,12 +741,13 @@ const server = http.createServer((req, res) => {
 
   /* ── 秘書アシスタント ─────────────────────── */
   if (url.pathname === '/api/secretary/status') {
-    const { apiKey, model } = loadAnthropicConfig();
+    const cfg = loadSecretaryConfig();
     const creds = loadGoogleCreds();
     const tok = loadGoogleToken();
     sendJson(res, 200, {
-      configured: !!apiKey,
-      model,
+      configured: cfg.mode !== 'off',
+      mode: cfg.mode,
+      model: cfg.model,
       calendarLinked: !!(creds && tok && tok.refresh_token),
     });
     return;
@@ -695,22 +765,42 @@ const server = http.createServer((req, res) => {
           throw new Error('ユーザーのメッセージがありません');
         }
         const ctx = await secretaryContext();
-        const { apiKey, model } = loadAnthropicConfig();
-        if (!apiKey) {
+        const cfg = loadSecretaryConfig();
+        const system = secretarySystemPrompt(ctx.text);
+
+        if (cfg.mode === 'off') {
           sendJson(res, 200, { reply: fallbackSecretaryReply(ctx), fallback: true, linked: ctx.linked });
           return;
         }
+
+        if (cfg.mode === 'cli') {
+          try {
+            const reply = await runClaudeCli({ cli: cfg.cli, model: cfg.model, system, prompt: flattenForCli(clean) });
+            sendJson(res, 200, { reply: reply || '(応答がありませんでした)', provider: 'claude-cli', model: cfg.model, linked: ctx.linked });
+          } catch (e) {
+            // CLI 失敗時は定型ブリーフィングにフォールバック(理由を添える)
+            sendJson(res, 200, {
+              reply: `⚠️ Claude CLI を利用できませんでした(${String(e.message)})。\n`
+                + 'サーバーを起動した端末で「claude」にログイン済みかご確認ください(未ログインなら claude を一度起動して /login)。\n\n'
+                + fallbackSecretaryReply(ctx),
+              fallback: true, linked: ctx.linked,
+            });
+          }
+          return;
+        }
+
+        // cfg.mode === 'api'
         const ar = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
-            'x-api-key': apiKey,
+            'x-api-key': cfg.apiKey,
             'anthropic-version': '2023-06-01',
             'content-type': 'application/json',
           },
           body: JSON.stringify({
-            model,
+            model: cfg.model,
             max_tokens: 1024,
-            system: secretarySystemPrompt(ctx.text),
+            system,
             messages: clean,
           }),
         });
@@ -725,7 +815,7 @@ const server = http.createServer((req, res) => {
           .map((c) => c.text)
           .join('\n')
           .trim() || '(応答がありませんでした)';
-        sendJson(res, 200, { reply, model, linked: ctx.linked });
+        sendJson(res, 200, { reply, provider: 'api', model: cfg.model, linked: ctx.linked });
       })
       .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;

@@ -94,16 +94,39 @@ Claude アカウント経由で他マシンのログを取得する API はあ�
 オフィス手前の「秘書アシスタント」デスク(💬)をクリックするとチャットパネルが開き、
 今日の予定・タスクを踏まえて「今やるべきこと」「予定に向けた準備」などを相談できます。
 
-- **API キー未設定でも動作** — その場合は今日の予定・タスクを整理した定型ブリーフィング(次の予定・やるべきタスク・期限切れ警告・準備アドバイス)を返します。
-- **自由に会話するには** — Anthropic API キーを設定します。いずれかの方法で:
-  - 環境変数: `ANTHROPIC_API_KEY=sk-ant-... node server.js`(モデル変更は `SECRETARY_MODEL=...`)
-  - ファイル: リポジトリ直下に `anthropic-credentials.json` を作成
-    ```json
-    { "apiKey": "sk-ant-...", "model": "claude-haiku-4-5-20251001" }
-    ```
+動作モードは自動で選ばれます(`configured` の順に優先):
+
+| モード | 条件 | 課金 |
+|---|---|---|
+| **cli** | この PC に Claude Code CLI があり、API キーが未設定 | **追加課金なし**(Claude Code のサブスク利用枠を消費) |
+| **api** | `ANTHROPIC_API_KEY` か `anthropic-credentials.json` を設定 | Anthropic API の従量課金 |
+| **off** | どちらも無い | 無料(定型ブリーフィングのみ) |
+
+**A) Claude Code のサブスクで会話する(追加課金なし)**
+サーバーを、Claude Code に**ログイン済みの端末**から起動するだけです:
+```bash
+node server.js   # claude コマンドをヘッドレス実行し、サブスクのログインを使う
+```
+- Claude Code の CLI (`claude`) がインストール済み・ログイン済みであることが前提です(未ログインなら一度 `claude` を起動して `/login`)。
+- 初回は macOS がキーチェーンへのアクセス許可を一度尋ねる場合があります。
+- サブスクの利用上限(Pro/Max のレート制限)を消費します。1リクエストごとに `claude` を起動するため API より数秒遅くなります。
+- `claude` のパスを明示するには `CLAUDE_CLI_PATH=/path/to/claude`。
+
+**B) Anthropic API キーで会話する(従量課金)**
+```bash
+ANTHROPIC_API_KEY=sk-ant-... node server.js        # モデル変更は SECRETARY_MODEL=...
+```
+またはリポジトリ直下に `anthropic-credentials.json`:
+```json
+{ "apiKey": "sk-ant-...", "model": "claude-haiku-4-5-20251001" }
+```
+
+**C) 未設定(無料)** — 今日の予定・タスクを整理した定型ブリーフィング(次の予定・やるべきタスク・期限切れ警告・準備アドバイス)を返します。
+
+- モードを固定したいときは `SECRETARY_PROVIDER=cli|api|auto|off`(既定 `auto`)。
 - 予定・タスクの文脈は上記 Google 連携から取得します(未連携なら一般的な相談のみ)。
-- API キーはこの PC 内でのみ使用し、Anthropic API 以外へは送信しません(`anthropic-credentials.json` は gitignore 済み)。
 - 既定モデルは `claude-haiku-4-5-20251001`。応答は毎回、その時点の予定・タスクを文脈として送ります。
+- API キーはこの PC 内でのみ使用し、Anthropic 以外へは送信しません(`anthropic-credentials.json` は gitignore 済み)。
 
 ## データソース
 

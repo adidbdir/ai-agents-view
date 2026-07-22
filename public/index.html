@@ -1236,9 +1236,13 @@ function renderSChat() {
 
 function renderSSug() {
   const sub = $('s-sub');
-  if (sStatus && !sStatus.configured) sub.textContent = '定型まとめモード(API キー未設定)';
-  else if (sStatus && !sStatus.calendarLinked) sub.textContent = 'カレンダー未連携 — 一般的な相談は可能';
-  else sub.textContent = '今日の予定・タスクの相談';
+  const mode = sStatus && sStatus.mode;
+  let label;
+  if (mode === 'cli') label = 'Claude(サブスク)で会話';
+  else if (mode === 'api') label = 'Anthropic API で会話';
+  else label = '定型まとめモード(未設定)';
+  if (sStatus && !sStatus.calendarLinked) label += ' ・ カレンダー未連携';
+  sub.textContent = label;
   $('s-sug').innerHTML = SUGGESTIONS.map((s, i) => `<button class="schip" onclick="suggest(${i})">${esc(s)}</button>`).join('');
 }
 function suggest(i) { if (!sBusy) sendSecretaryText(SUGGESTIONS[i]); }
