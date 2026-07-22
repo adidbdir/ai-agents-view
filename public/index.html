@@ -362,6 +362,24 @@
     border-radius: 50%; display: inline-block; animation: xspin .8s linear infinite;
   }
   @keyframes xspin { to { transform: rotate(360deg); } }
+  .xchip.pending { background: #eef1f3; color: #93a0ab; }
+  .xchip.researching { background: #e4f2ef; color: #1f6f63; }
+  .xchip .cspin {
+    width: 10px; height: 10px; border: 2px solid #bfe0d9; border-top-color: #1f7a6e;
+    border-radius: 50%; display: inline-block; animation: xspin .8s linear infinite;
+  }
+
+  /* ── パネルのリサイズハンドル(左端ドラッグで幅変更)──────── */
+  .panel-resize {
+    position: absolute; left: 0; top: 0; width: 10px; height: 100%;
+    cursor: ew-resize; z-index: 6; touch-action: none;
+  }
+  .panel-resize::before {
+    content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 46px; border-radius: 3px; background: rgba(255,255,255,.4);
+    transition: background .15s ease;
+  }
+  .panel-resize:hover::before { background: rgba(255,255,255,.75); }
 </style>
 </head>
 <body>
@@ -421,6 +439,7 @@
   </div>
 
   <div class="panel spanel" id="spanel">
+    <div class="panel-resize" id="s-resize"></div>
     <div class="panel-head">
       <button class="close" onclick="closeSPanel()">✕</button>
       <div class="pj">秘書アシスタント</div>
@@ -435,13 +454,14 @@
   </div>
 
   <div class="panel xpanel" id="xpanel">
+    <div class="panel-resize" id="x-resize"></div>
     <div class="panel-head">
       <button class="close" onclick="closeXPanel()">✕</button>
       <div class="pj">探検家</div>
       <div class="pth" id="x-sub">トピックのニュース・論文を調査</div>
     </div>
     <form class="xform" id="x-form" onsubmit="return researchSubmit(event)">
-      <input id="x-input" type="text" placeholder="調べたいトピック(例: LLMエージェント)" maxlength="80" autocomplete="off">
+      <input id="x-input" type="text" placeholder="トピック(カンマ区切りで複数可)" maxlength="200" autocomplete="off">
       <button type="submit" id="x-send">🔍 調査</button>
     </form>
     <div class="xchips" id="x-chips"></div>
@@ -1191,8 +1211,9 @@ $('range').addEventListener('change', () => { lastRenderKey = null; render(); })
 /* ══════════ 探検家(トピック調査)══════════ */
 let XSTATUS = null;   // {configured, mode, model, topics, reports, running}
 let xUnread = false;  // 週次の新着レポート未読フラグ(キャラの ! バッジ)
-let xBusy = false;    // 調査中
+let xBusy = false;    // 調査中(バッチ実行中)
 let xCurrent = null;  // 表示中トピック
+let xProgress = null; // 一括調査の進捗 {current}
 
 function forceRerender() { lastRenderKey = null; if (DATA) render(); }
 
@@ -1237,11 +1258,17 @@ function renderXTop() {
 
 function renderXChips() {
   const topics = (XSTATUS && XSTATUS.topics) || [];
-  $('x-chips').innerHTML = topics.map((t, i) =>
-    `<span class="xchip${t === xCurrent ? ' active' : ''}" onclick="showReportIdx(${i})">`
-    + esc(t)
-    + `<span class="del" title="削除" onclick="deleteTopicIdx(event,${i})">✕</span></span>`
-  ).join('');
+  const reports = (XSTATUS && XSTATUS.reports) || {};
+  $('x-chips').innerHTML = topics.map((t, i) => {
+    const researching = xProgress && xProgress.current === t;
+    let cls = 'xchip';
+    if (t === xCurrent) cls += ' active';
+    if (researching) cls += ' researching';
+    else if (!reports[t]) cls += ' pending';
+    const spin = researching ? '<span class="cspin"></span>' : '';
+    return `<span class="${cls}" onclick="showReportIdx(${i})">${spin}${esc(t)}`
+      + `<span class="del" title="削除" onclick="deleteTopicIdx(event,${i})">✕</span></span>`;
+  }).join('');
 }
 function showReportIdx(i) { const t = ((XSTATUS && XSTATUS.topics) || [])[i]; if (t) showReport(t); }
 function deleteTopicIdx(ev, i) {
@@ -1274,38 +1301,74 @@ async function showReport(topic) {
   }
 }
 
+// 入力を複数トピックに分割(カンマ/読点/改行区切り)
+function parseTopics(raw) {
+  return [...new Set(String(raw).split(/[,、\n]+/).map((s) => s.trim()).filter(Boolean).map((s) => s.slice(0, 80)))];
+}
+
 function researchSubmit(ev) {
   ev.preventDefault();
   const inp = $('x-input');
-  const t = inp.value.trim();
-  if (!t || xBusy) return false;
+  const topics = parseTopics(inp.value);
+  if (!topics.length || xBusy) return false;
   inp.value = '';
-  runResearch(t);
+  runResearchBatch(topics);
   return false;
 }
 
-async function runResearch(topic) {
+async function saveTopicsList(topics) {
+  await fetch('/api/explorer/topics', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topics }),
+  });
+}
+
+// 複数トピックをまとめて追加し、未取得のものを順番に調査する
+async function runResearchBatch(topics) {
   if (xBusy) return;
-  xBusy = true; xCurrent = topic;
+  xBusy = true;
   $('x-send').disabled = true;
-  renderXChips();
-  const body = $('x-body');
-  body.innerHTML = `<div class="xspin"><i></i>「${esc(topic)}」を調査中…(30秒〜数分かかります)</div>`;
+  const MAX = 8;
   try {
-    const r = await fetch('/api/explorer/research', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic }),
-    });
-    const j = await r.json();
-    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    // 新規を先頭にしてマージ・保存(即座にチップ表示)
+    const existing = (XSTATUS && XSTATUS.topics) || [];
+    const merged = [...new Set([...topics, ...existing])].slice(0, MAX);
+    await saveTopicsList(merged);
     await loadXStatus();
+    renderXTop();
+    // 保存された範囲で、まだレポートが無いトピックだけ調査
+    const saved = (XSTATUS && XSTATUS.topics) || merged;
+    const reports = (XSTATUS && XSTATUS.reports) || {};
+    const todo = topics.filter((t) => saved.includes(t) && !reports[t]);
+    const body = $('x-body');
+    for (let i = 0; i < todo.length; i++) {
+      const t = todo[i];
+      xCurrent = t;
+      xProgress = { current: t };
+      renderXChips();
+      const prog = todo.length > 1 ? `(${i + 1}/${todo.length}) ` : '';
+      body.innerHTML = `<div class="xspin"><i></i>${prog}「${esc(t)}」を調査中…(各30秒〜数分かかります)</div>`;
+      try {
+        const r = await fetch('/api/explorer/research', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic: t }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+      } catch (e) {
+        body.innerHTML = `<div class="xempty">「${esc(t)}」の調査に失敗しました: ${esc(e.message)}</div>`;
+      }
+      await loadXStatus();
+    }
+    xProgress = null;
     renderXChips();
-    body.innerHTML = `<div class="xmeta">${esc(j.topic)} ・ ${provLabel(j.provider)} ・ ${fmtAt(j.at)}</div>` + mdToHtml(j.report);
     localStorage.setItem('xSeenAt', String(Date.now()));
-  } catch (e) {
-    body.innerHTML = `<div class="xempty">調査に失敗しました: ${esc(e.message)}</div>`;
+    const show = todo[0] || saved[0];
+    if (show) showReport(show); else renderXBody();
   } finally {
+    xProgress = null;
     xBusy = false; $('x-send').disabled = false;
+    renderXChips();
   }
 }
 
@@ -1367,6 +1430,38 @@ function mdToHtml(md) {
 
 // 起動時に一度だけ状態を取得し、未読バッジを反映
 loadXStatus().then(() => { xUnread = computeUnread(); if (xUnread) forceRerender(); });
+
+/* ══════════ パネルのリサイズ(左端ドラッグ)══════════ */
+// 右ドッキングのパネルは幅を増やすと左へ広がる。localStorage に幅を保存・復元。
+function makeResizable(panelId, handle) {
+  if (!handle) return;
+  const saved = localStorage.getItem('pw:' + panelId);
+  if (saved) $(panelId).style.width = saved;
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const panel = $(panelId);
+    const startX = e.clientX;
+    const startW = panel.getBoundingClientRect().width;
+    const minW = 360, maxW = window.innerWidth * 0.92;
+    document.body.style.userSelect = 'none';
+    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const move = (ev) => {
+      const w = Math.max(minW, Math.min(maxW, startW + (startX - ev.clientX)));
+      panel.style.width = w + 'px';
+    };
+    const up = () => {
+      document.body.style.userSelect = '';
+      try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      if (panel.style.width) localStorage.setItem('pw:' + panelId, panel.style.width);
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
+}
+makeResizable('spanel', $('s-resize'));
+makeResizable('xpanel', $('x-resize'));
 
 /* ══════════ 時間帯で変わる外の空 ══════════ */
 // 空色のキーフレーム [時刻, [上, 中, 地平線]]。間を補間して滑らかに遷移。
