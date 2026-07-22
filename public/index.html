@@ -1287,7 +1287,11 @@ async function sendSecretaryText(text, silent) {
     inp.style.height = Math.min(120, inp.scrollHeight) + 'px';
   });
   inp.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('s-form').requestSubmit(); }
+    // IME 変換中(日本語入力の確定など)の Enter は送信しない
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      $('s-form').requestSubmit();
+    }
   });
 })();
 </script>
