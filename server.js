@@ -328,6 +328,18 @@ const server = http.createServer((req, res) => {
   });
 });
 
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`エラー: ポート ${PORT} は既に使用中です。`);
+    console.error(`既にこのサーバーが起動している可能性があります → http://localhost:${PORT} を開いて確認してください。`);
+    console.error(`  使用中のプロセス確認: lsof -ti:${PORT}   (Linux: ss -ltnp | grep ${PORT})`);
+    console.error(`  停止して起動し直す:   kill $(lsof -ti:${PORT}) && node server.js`);
+    console.error(`  別ポートで起動する:   PORT=4380 node server.js`);
+    process.exit(1);
+  }
+  throw e;
+});
+
 server.listen(PORT, () => {
   console.log(`AI Agents View: http://localhost:${PORT}`);
   console.log(`watching: ${PROJECTS_DIR}`);
