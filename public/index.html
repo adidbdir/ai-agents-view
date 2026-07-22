@@ -29,6 +29,51 @@
   }
   #app { position: relative; width: 100vw; height: 100vh; }
 
+  /* ── 時間帯で変わる外の空 ─────────────────────── */
+  #sky {
+    position: absolute; inset: 0; z-index: 0; overflow: hidden;
+    background: linear-gradient(180deg, #7fb0e6 0%, #aecdec 45%, #e0eefb 100%);
+    transition: background 2.4s ease;
+  }
+  #stars {
+    position: absolute; inset: 0; opacity: 0; transition: opacity 2.4s ease;
+  }
+  #stars i {
+    position: absolute; width: 2px; height: 2px; border-radius: 50%;
+    background: #fff; box-shadow: 0 0 3px 1px rgba(255,255,255,.7);
+    animation: twinkle var(--tw, 4s) ease-in-out infinite;
+  }
+  @keyframes twinkle { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+  #celestial {
+    position: absolute; width: 78px; height: 78px; border-radius: 50%;
+    left: 50%; top: 30%; transform: translate(-50%,-50%);
+    transition: left 2.4s ease, top 2.4s ease, background 2.4s ease, box-shadow 2.4s ease, opacity 2.4s ease;
+    pointer-events: none;
+  }
+  #clouds {
+    position: absolute; inset: 0; opacity: .8; transition: opacity 2.4s ease;
+    background-repeat: no-repeat;
+    background-image:
+      radial-gradient(60px 26px at 18% 24%, rgba(255,255,255,.85), transparent 70%),
+      radial-gradient(90px 32px at 26% 22%, rgba(255,255,255,.7), transparent 72%),
+      radial-gradient(70px 26px at 74% 16%, rgba(255,255,255,.75), transparent 70%),
+      radial-gradient(50px 20px at 80% 20%, rgba(255,255,255,.6), transparent 72%),
+      radial-gradient(80px 28px at 48% 12%, rgba(255,255,255,.5), transparent 72%);
+    animation: drift 90s linear infinite;
+  }
+  @keyframes drift { 0% { background-position: 0 0,0 0,0 0,0 0,0 0; } 100% { background-position: 120px 0,-90px 0,140px 0,-70px 0,100px 0; } }
+  #tod-pill {
+    position: absolute; top: 22px; right: 210px; z-index: 20;
+    display: flex; align-items: center; gap: 7px;
+    background: rgba(255,255,255,.7); backdrop-filter: blur(6px);
+    border-radius: 999px; padding: 7px 14px 7px 11px;
+    box-shadow: 0 4px 14px rgba(45,62,80,.16);
+    font-size: 12.5px; font-weight: 700; color: #33475b; white-space: nowrap;
+    transition: background .6s ease, color .6s ease;
+  }
+  #tod-pill #tod-icon { font-size: 15px; line-height: 1; }
+  #tod-pill.night { background: rgba(20,28,54,.55); color: #dfe7fb; }
+
   /* ── タイトルカプセル ─────────────────────────── */
   .title-capsule {
     position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
@@ -74,7 +119,7 @@
   }
 
   /* ── SVG ステージ ───────────────────────────── */
-  #stage { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #stage { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
   .node-g { cursor: pointer; }
   .node-g text { pointer-events: none; }
 
@@ -270,6 +315,13 @@
 </head>
 <body>
 <div id="app">
+  <div id="sky">
+    <div id="stars"></div>
+    <div id="clouds"></div>
+    <div id="celestial"></div>
+  </div>
+  <div id="tod-pill"><span id="tod-icon">☀️</span><span id="tod-text"></span></div>
+
   <div class="title-capsule">AI Agents View<small>CLAUDE CODE SESSION MONITOR</small></div>
 
   <a class="page-link" href="/sessions">📊 セッション一覧</a>
@@ -999,6 +1051,114 @@ setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
+
+/* ══════════ 時間帯で変わる外の空 ══════════ */
+// 空色のキーフレーム [時刻, [上, 中, 地平線]]。間を補間して滑らかに遷移。
+const SKY_KF = [
+  [0,    ['#0a1026', '#111a38', '#1b2749']],
+  [4.5,  ['#182247', '#2c2e57', '#5b3f63']],
+  [6,    ['#3b4f80', '#8a6f92', '#d98f7e']],
+  [7,    ['#6f92c8', '#cfa58e', '#f3c896']],
+  [9,    ['#7fb0e6', '#aecdec', '#e0eefb']],
+  [12,   ['#4f97e0', '#8fbdee', '#e8f3fd']],
+  [15,   ['#5f97dc', '#a3c6ea', '#eef2e6']],
+  [17,   ['#6480bd', '#d69f7e', '#f6cd8e']],
+  [18.5, ['#4a4a86', '#b76a80', '#ec9046']],
+  [19.7, ['#2a2f5c', '#5a4a76', '#8a5570']],
+  [21,   ['#141c3e', '#26305a', '#3c4570']],
+  [22.5, ['#0c1329', '#151d3d', '#222c50']],
+  [24,   ['#0a1026', '#111a38', '#1b2749']],
+];
+function hex2rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+function mix(a, b, t) { return a.map((v, i) => Math.round(v + (b[i] - v) * t)); }
+function rgb(a) { return `rgb(${a[0]},${a[1]},${a[2]})`; }
+function skyColors(h) {
+  let lo = SKY_KF[0], hi = SKY_KF[SKY_KF.length - 1];
+  for (let i = 0; i < SKY_KF.length - 1; i++) {
+    if (h >= SKY_KF[i][0] && h <= SKY_KF[i + 1][0]) { lo = SKY_KF[i]; hi = SKY_KF[i + 1]; break; }
+  }
+  const t = hi[0] === lo[0] ? 0 : (h - lo[0]) / (hi[0] - lo[0]);
+  return [0, 1, 2].map((k) => rgb(mix(hex2rgb(lo[1][k]), hex2rgb(hi[1][k]), t)));
+}
+// 太陽/月の位置(空を弧を描いて横断)
+function celestialAt(h) {
+  const day = h >= 5.3 && h < 18.7;
+  let p;
+  if (day) p = (h - 5.3) / (18.7 - 5.3);
+  else { const hh = h < 5.3 ? h + 24 : h; p = (hh - 18.7) / (5.3 + 24 - 18.7); }
+  const x = 8 + p * 84;                       // 8%〜92%(東→西)
+  const y = 82 - Math.sin(p * Math.PI) * 64;  // 弧: 地平線82%〜天頂18%
+  const edge = Math.min(1, Math.min(p, 1 - p) / 0.14); // 0=地平線際 1=空高く
+  return { x, y, isSun: day, edge };
+}
+// 星の明るさ(夜=1、薄明で減衰)
+function starAlpha(h) {
+  if (h < 4.5 || h >= 21.5) return 1;
+  if (h < 6.5) return Math.max(0, (6.5 - h) / 2);
+  if (h < 19.5) return 0;
+  return Math.min(1, (h - 19.5) / 2);
+}
+function phaseInfo(h) {
+  if (h < 4.5)  return ['🌙', '深夜'];
+  if (h < 6.5)  return ['🌅', '夜明け'];
+  if (h < 9)    return ['🌄', '早朝'];
+  if (h < 11)   return ['☀️', '午前'];
+  if (h < 14)   return ['☀️', '日中'];
+  if (h < 16.5) return ['🌤️', '午後'];
+  if (h < 18.5) return ['🌇', '夕方'];
+  if (h < 20)   return ['🌆', '夕暮れ'];
+  if (h < 22.5) return ['🌙', '宵'];
+  return ['🌙', '深夜'];
+}
+function buildStars() {
+  const box = $('stars');
+  if (box.childElementCount) return;
+  let html = '';
+  for (let i = 0; i < 80; i++) {
+    const x = (Math.random() * 100).toFixed(2);
+    const y = (Math.random() * 62).toFixed(2);      // 上部62%だけに配置
+    const s = (Math.random() * 1.6 + 1).toFixed(2);
+    const tw = (Math.random() * 4 + 2.5).toFixed(1);
+    const dl = (Math.random() * 5).toFixed(1);
+    html += `<i style="left:${x}%;top:${y}%;width:${s}px;height:${s}px;--tw:${tw}s;animation-delay:${dl}s"></i>`;
+  }
+  box.innerHTML = html;
+}
+function updateSky() {
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60;
+  const [top, mid, hor] = skyColors(h);
+  $('sky').style.background = `linear-gradient(180deg, ${top} 0%, ${mid} 46%, ${hor} 100%)`;
+
+  const c = celestialAt(h);
+  const cel = $('celestial');
+  cel.style.left = c.x + '%';
+  cel.style.top = c.y + '%';
+  if (c.isSun) {
+    // 地平線際は赤みが強く、高いほど明るい黄
+    const disc = rgb(mix(hex2rgb('#ff8a4c'), hex2rgb('#fff4bf'), c.edge));
+    const glow = rgb(mix(hex2rgb('#ff7a3c'), hex2rgb('#ffd97a'), c.edge));
+    cel.style.background = `radial-gradient(circle, #fffaf0 0%, ${disc} 68%, ${disc} 100%)`;
+    cel.style.boxShadow = `0 0 60px 24px ${glow}, 0 0 140px 60px ${glow}55`;
+    cel.style.width = cel.style.height = '78px';
+  } else {
+    cel.style.background = `radial-gradient(circle at 38% 34%, #fdffff 0%, #e7eeff 55%, #cdd8f5 100%)`;
+    cel.style.boxShadow = `0 0 40px 12px rgba(200,214,255,.45), 0 0 90px 30px rgba(170,190,245,.25)`;
+    cel.style.width = cel.style.height = '58px';
+  }
+
+  const sa = starAlpha(h);
+  $('stars').style.opacity = sa;
+  $('clouds').style.opacity = (0.85 * (1 - sa) * (c.isSun ? 1 : 0.5)).toFixed(2);
+
+  const [icon, label] = phaseInfo(h);
+  $('tod-icon').textContent = icon;
+  $('tod-text').textContent = `${label} ・ ${now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`;
+  $('tod-pill').classList.toggle('night', sa > 0.5);
+}
+buildStars();
+updateSky();
+setInterval(updateSky, 30000);
 
 /* ══════════ Google 今日の予定 / タスク ══════════ */
 let GDATA = null;
