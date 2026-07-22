@@ -217,6 +217,47 @@
   .gsetup { font-size: 12px; line-height: 1.8; color: #3c4c5d; }
   .gsetup code { background: #eef3f8; border-radius: 5px; padding: 1px 5px; font-size: 11px; }
   .gsetup ol { padding-left: 18px; }
+
+  /* ── 秘書アシスタント・チャット ───────────────── */
+  .spanel { width: 420px; }
+  .spanel .panel-head { position: relative; background: linear-gradient(135deg, #4a2f66 0%, #6d4a86 100%); }
+  .schat {
+    flex: 1; overflow-y: auto; padding: 16px 16px 8px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .sbubble {
+    max-width: 84%; padding: 10px 13px; border-radius: 14px;
+    font-size: 13px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+  }
+  .sbubble.user { align-self: flex-end; background: var(--navy); color: #fff; border-bottom-right-radius: 4px; }
+  .sbubble.bot  { align-self: flex-start; background: #f2f0f7; color: #2b2536; border-bottom-left-radius: 4px; }
+  .sbubble.bot.err { background: #fdecec; color: #c0392b; }
+  .sbubble .role { display: block; font-size: 10px; font-weight: 700; opacity: .55; margin-bottom: 3px; }
+  .styping { align-self: flex-start; padding: 8px 6px; }
+  .styping span {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #b9a7cc; margin: 0 2px; animation: sdot 1s infinite;
+  }
+  .styping span:nth-child(2) { animation-delay: .15s; }
+  .styping span:nth-child(3) { animation-delay: .3s; }
+  @keyframes sdot { 0%,60%,100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+  .ssug { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 0; }
+  .schip {
+    font-size: 11.5px; font-weight: 600; color: #5a3e7a; background: #efe6f6;
+    border: none; border-radius: 999px; padding: 6px 11px; cursor: pointer; font-family: inherit;
+  }
+  .schip:hover { background: #e3d3f0; }
+  .sform { display: flex; gap: 8px; padding: 12px 14px 16px; border-top: 1px solid #ece7f2; }
+  .sform textarea {
+    flex: 1; resize: none; font-family: inherit; font-size: 13px; line-height: 1.5;
+    padding: 9px 12px; border: 1px solid #d5dde6; border-radius: 12px; max-height: 120px;
+    background: #fff; color: var(--navy);
+  }
+  .sform button {
+    border: none; border-radius: 12px; color: #fff; font-weight: 700; padding: 0 16px;
+    cursor: pointer; background: linear-gradient(135deg, #4a2f66, #6d4a86); font-family: inherit; font-size: 13px;
+  }
+  .sform button:disabled { opacity: .45; cursor: default; }
 </style>
 </head>
 <body>
@@ -264,6 +305,20 @@
       <div class="badges" id="p-badges"></div>
     </div>
     <div class="panel-body" id="p-body"></div>
+  </div>
+
+  <div class="panel spanel" id="spanel">
+    <div class="panel-head">
+      <button class="close" onclick="closeSPanel()">✕</button>
+      <div class="pj">秘書アシスタント</div>
+      <div class="pth" id="s-sub">今日の予定・タスクの相談</div>
+    </div>
+    <div class="schat" id="s-chat"></div>
+    <div class="ssug" id="s-sug"></div>
+    <form class="sform" id="s-form" onsubmit="return sendSecretary(event)">
+      <textarea id="s-input" rows="1" placeholder="今日やるべきこと・予定・準備について聞く…" maxlength="2000"></textarea>
+      <button type="submit" id="s-send">送信</button>
+    </form>
   </div>
 </div>
 
@@ -564,6 +619,48 @@ function coffeeCorner() {
   return g;
 }
 
+/* 秘書の受付デスク(クリックでチャット) */
+function secretaryStation() {
+  const g = el('g', { class: 'node-g' });
+  // 床タイル(紫みで区別)
+  g.appendChild(el('path', { d: tilePath(70, 35), fill: '#f0eaf6', stroke: '#fff', 'stroke-width': 2.5 }));
+  g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#c9a7e0', 'stroke-width': 2.5, class: 'pulse-ring' }));
+
+  // 着席した秘書(デスクの奥)
+  const ps = person({ pose: 'work', suit: '#6d4a86', shirt: '#efe4f6', hair: '#2a2431', anim: 'bob' });
+  ps.setAttribute('transform', 'translate(12,-30) scale(1.06)');
+  g.appendChild(ps);
+
+  // 受付デスク
+  g.appendChild(isoBox(0, -4, 58, 32, 24, '#f5eefb', '#d3c1e4', '#c0abd6'));
+  // デスク上のノートPC
+  const scr = el('g', { transform: 'translate(-16,-28)' });
+  scr.appendChild(el('path', { d: 'M-14,-1 L10,-13 L10,-33 L-14,-21 Z', fill: '#3a2b4d' }));
+  scr.appendChild(el('path', { d: 'M-11,-5 L7,-14 L7,-30 L-11,-20 Z', fill: '#c9a7e0', filter: 'url(#glow)' }));
+  g.appendChild(scr);
+  g.appendChild(el('path', { d: 'M-8,-22 l13,-6.5 l9,4.5 l-13,6.5 Z', fill: '#e5d8f0' }));
+
+  // 吹き出し(クリック可能の合図)
+  const bub = el('g', { class: 'bob', transform: 'translate(26,-84)' });
+  bub.appendChild(el('rect', { x: -17, y: -16, width: 34, height: 27, rx: 10, fill: '#fff', stroke: '#c9a7e0', 'stroke-width': 2, filter: 'url(#soft)' }));
+  bub.appendChild(el('path', { d: 'M-7,9 l7,9 l7,-9 Z', fill: '#fff' }));
+  const bt = el('text', { x: 0, y: 3, 'text-anchor': 'middle', 'font-size': 15 });
+  txt(bt, '💬'); bub.appendChild(bt);
+  g.appendChild(bub);
+
+  // ネームプレート
+  const plate = el('g', { transform: 'translate(0,50)' });
+  plate.appendChild(el('rect', { x: -58, y: -14, width: 116, height: 31, rx: 9, fill: '#4a2f66', filter: 'url(#soft)' }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, '秘書アシスタント');
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#d9c4ea', 'font-size': 9.5 });
+  txt(t2, 'クリックで相談 💬');
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
 /* ══════════ フロア(プレート) ══════════ */
 function buildDefs() {
   const defs = el('defs');
@@ -719,6 +816,15 @@ function render() {
     items.push({ y: pt.y, el: g });
   }
 
+  // 秘書(常に最前面・クリックでチャット)
+  {
+    const pt = iso(.08, .08);
+    const g = secretaryStation();
+    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    g.addEventListener('pointerdown', openSPanel);
+    items.push({ y: pt.y + 1e4, el: g });
+  }
+
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
 
@@ -765,6 +871,7 @@ function openPanel(id) {
   selectedId = id;
   const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
   if (!p) return;
+  closeSPanel();
   fillPanel(p);
   $('panel').classList.add('open');
 }
@@ -880,7 +987,7 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
 
 /* ══════════ Google 今日の予定 / タスク ══════════ */
@@ -1042,7 +1149,7 @@ function renderGoogle() {
   $('g-body').innerHTML = html;
 }
 
-function openGPanel() { $('gpanel').classList.add('open'); renderGoogle(); }
+function openGPanel() { closeSPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
 function closeGPanel() { $('gpanel').classList.remove('open'); }
 
 async function toggleTask(listId, taskId, completed) {
@@ -1076,6 +1183,109 @@ function addTask(ev, listId) {
 
 gtick();
 setInterval(gtick, 60000);
+
+/* ══════════ 秘書アシスタント・チャット ══════════ */
+let SCHAT = [];          // {role, content, hidden?, error?}
+let sBusy = false;
+let sStatus = null;      // {configured, model, calendarLinked}
+let sGreeted = false;
+
+const SUGGESTIONS = [
+  '今日のスケジュールをまとめて',
+  '今やるべきタスクは？',
+  '次の予定の準備で必要なものは？',
+  '期限が近いタスクを教えて',
+];
+
+async function loadSStatus() {
+  try { sStatus = await (await fetch('/api/secretary/status')).json(); }
+  catch { sStatus = null; }
+}
+
+function openSPanel() {
+  closePanel(); closeGPanel();
+  $('spanel').classList.add('open');
+  renderSChat();
+  if (!sGreeted) {
+    sGreeted = true;
+    loadSStatus().then(() => {
+      renderSSug();
+      if (!SCHAT.length) {
+        // 初回は今日のブリーフィングを自動生成(ユーザー発話は非表示)
+        sendSecretaryText('今日のスケジュールのまとめと、今日やるべきこと・準備すべきことを教えて', true);
+      }
+    });
+  }
+  setTimeout(() => { const i = $('s-input'); if (i) i.focus(); }, 320);
+}
+function closeSPanel() { $('spanel').classList.remove('open'); }
+
+function renderSChat() {
+  const box = $('s-chat');
+  let html = '';
+  for (const m of SCHAT) {
+    if (m.hidden) continue;
+    html += `<div class="sbubble ${m.role === 'user' ? 'user' : 'bot'}${m.error ? ' err' : ''}">`
+      + (m.role === 'user' ? '' : '<span class="role">秘書</span>')
+      + esc(m.content) + '</div>';
+  }
+  if (sBusy) html += '<div class="styping"><span></span><span></span><span></span></div>';
+  box.innerHTML = html;
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderSSug() {
+  const sub = $('s-sub');
+  if (sStatus && !sStatus.configured) sub.textContent = '定型まとめモード(API キー未設定)';
+  else if (sStatus && !sStatus.calendarLinked) sub.textContent = 'カレンダー未連携 — 一般的な相談は可能';
+  else sub.textContent = '今日の予定・タスクの相談';
+  $('s-sug').innerHTML = SUGGESTIONS.map((s, i) => `<button class="schip" onclick="suggest(${i})">${esc(s)}</button>`).join('');
+}
+function suggest(i) { if (!sBusy) sendSecretaryText(SUGGESTIONS[i]); }
+
+function updateSendBtn() { const b = $('s-send'); if (b) b.disabled = sBusy; }
+
+function sendSecretary(ev) {
+  ev.preventDefault();
+  const inp = $('s-input');
+  const t = inp.value.trim();
+  if (!t || sBusy) return false;
+  inp.value = ''; inp.style.height = 'auto';
+  sendSecretaryText(t);
+  return false;
+}
+
+async function sendSecretaryText(text, silent) {
+  if (sBusy) return;
+  SCHAT.push({ role: 'user', content: text, hidden: !!silent });
+  sBusy = true; updateSendBtn(); renderSChat();
+  try {
+    const r = await fetch('/api/secretary/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: SCHAT.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content })) }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    SCHAT.push({ role: 'assistant', content: j.reply });
+  } catch (e) {
+    SCHAT.push({ role: 'assistant', content: '応答を取得できませんでした: ' + e.message, error: true });
+  } finally {
+    sBusy = false; updateSendBtn(); renderSChat();
+  }
+}
+
+// 入力欄: 自動リサイズ + Enter 送信(Shift+Enter で改行)
+(function () {
+  const inp = $('s-input');
+  if (!inp) return;
+  inp.addEventListener('input', () => {
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(120, inp.scrollHeight) + 'px';
+  });
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('s-form').requestSubmit(); }
+  });
+})();
 </script>
 </body>
 </html>

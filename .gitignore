@@ -4,3 +4,4 @@ peers.json
 nohup.out
 google-credentials.json
 google-token.json
+anthropic-credentials.json

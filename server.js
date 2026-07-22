@@ -299,6 +299,23 @@ const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https:/
 const CRED_PATH = path.join(__dirname, 'google-credentials.json');
 const TOKEN_PATH = path.join(__dirname, 'google-token.json');
 
+/* 秘書アシスタント(Anthropic API)の設定。
+ * 環境変数 ANTHROPIC_API_KEY / SECRETARY_MODEL、または anthropic-credentials.json
+ *   { "apiKey": "sk-ant-...", "model": "claude-..." }
+ * 未設定でも動作する(定型ブリーフィングにフォールバック)。 */
+const ANTHROPIC_CRED_PATH = path.join(__dirname, 'anthropic-credentials.json');
+const DEFAULT_SECRETARY_MODEL = 'claude-haiku-4-5-20251001';
+function loadAnthropicConfig() {
+  let apiKey = process.env.ANTHROPIC_API_KEY || null;
+  let model = process.env.SECRETARY_MODEL || null;
+  try {
+    const j = JSON.parse(fs.readFileSync(ANTHROPIC_CRED_PATH, 'utf8'));
+    if (!apiKey && j.apiKey) apiKey = j.apiKey;
+    if (!model && j.model) model = j.model;
+  } catch { /* 未設定 */ }
+  return { apiKey, model: model || DEFAULT_SECRETARY_MODEL };
+}
+
 function loadGoogleCreds() {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
@@ -359,6 +376,10 @@ async function gApi(url, opts = {}) {
 function localDateStr(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+function hm(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 /** 今日の予定 (カレンダー) + タスク (ToDo) を集める。30秒キャッシュ。 */
 let agendaCache = { at: 0, data: null };
@@ -412,6 +433,104 @@ async function fetchAgenda() {
   const data = { generatedAt: Date.now(), date: today, events, taskLists };
   agendaCache = { at: Date.now(), data };
   return data;
+}
+
+/* ══════════ 秘書アシスタント ══════════
+ * 今日の予定 (カレンダー) + タスク (ToDo) を文脈として Anthropic API に渡し、
+ * 予定のまとめ・やるべきこと・準備の相談に答える。API キー未設定時は定型ブリーフィング。 */
+
+/** 今日の予定・タスクを LLM 用のテキスト文脈にする */
+async function secretaryContext() {
+  const creds = loadGoogleCreds();
+  const tok = loadGoogleToken();
+  if (!creds || !tok || !tok.refresh_token) {
+    return { linked: false, text: 'Google カレンダー / ToDo は未連携のため、今日の予定・タスク情報はありません。' };
+  }
+  let a;
+  try {
+    a = await fetchAgenda();
+  } catch (e) {
+    return { linked: false, text: `(予定・タスクの取得に失敗しました: ${String(e.message).slice(0, 120)})` };
+  }
+
+  const lines = [`日付: ${a.date}`, '', '■ 今日の予定'];
+  if (!a.events.length) lines.push('  なし');
+  for (const e of a.events) {
+    const time = e.allDay ? '終日' : `${hm(e.start)}–${hm(e.end)}`;
+    let l = `  - ${time} ${e.summary}`;
+    if (e.location) l += ` @${e.location}`;
+    if (e.meetLink) l += '（オンライン/Meet）';
+    lines.push(l);
+  }
+  lines.push('', '■ タスク (ToDo)');
+  let any = false;
+  for (const list of a.taskLists) {
+    for (const t of list.tasks) {
+      any = true;
+      const box = t.completed ? '[完了]' : '[未]';
+      let l = `  ${box} ${t.title}`;
+      if (t.due) l += `（期日 ${t.due}${!t.completed && t.due < a.date ? ' ※期限切れ' : ''}）`;
+      if (t.notes) l += ` — ${String(t.notes).slice(0, 60)}`;
+      lines.push(l);
+    }
+  }
+  if (!any) lines.push('  なし');
+  return { linked: true, text: lines.join('\n'), data: a };
+}
+
+function secretarySystemPrompt(ctxText) {
+  const now = new Date();
+  const nowStr = `${localDateStr(now)} ${hm(now)}`;
+  return `あなたはユーザー専属の有能な日本語の秘書です。現在時刻は ${nowStr} です。
+下記「今日の情報」(Google カレンダーの予定と Google ToDo のタスク) を踏まえてユーザーの相談に答えます。
+
+方針:
+- 今日の予定の要点、優先してやるべきタスク、締め切り、各予定に向けて準備すべきものを、具体的かつ実務的に助言する。
+- 簡潔に。要点は短い箇条書き(・)でまとめ、前置きや定型的な挨拶は最小限にする。
+- 時刻・期日は正確に扱い、「進行中」「次の予定」「期限切れ」を意識する。
+- 情報にないことは推測で断定せず「情報にありません」と述べる。Markdown の見出し(#)は使わない。
+- 常に日本語で回答する。
+
+【今日の情報】
+${ctxText}`;
+}
+
+/** API キー未設定時の定型ブリーフィング */
+function fallbackSecretaryReply(ctx) {
+  const note = 'ℹ️ Anthropic API キーが未設定のため、自由な会話の代わりに今日の情報をまとめました。'
+    + '(server.js を起動する環境で ANTHROPIC_API_KEY を設定するか、anthropic-credentials.json に {"apiKey":"sk-ant-..."} を置くと、秘書と自由に会話できます。)\n\n';
+  if (!ctx.linked || !ctx.data) {
+    return note + ctx.text + '\n\nGoogle と連携すると、今日の予定・タスクに基づいた助言ができます。';
+  }
+  const a = ctx.data;
+  const now = Date.now();
+  const timed = a.events.filter((e) => !e.allDay);
+  const nowEv = timed.find((e) => Date.parse(e.start) <= now && Date.parse(e.end) > now);
+  const nextEv = timed.find((e) => Date.parse(e.start) > now);
+  const out = [`【${a.date} の予定】 ${a.events.length}件`];
+  if (nowEv) out.push(`・進行中: ${nowEv.summary}(〜${hm(nowEv.end)})`);
+  if (nextEv) out.push(`・次: ${hm(nextEv.start)} ${nextEv.summary}`);
+  for (const e of a.events) {
+    out.push(`  - ${e.allDay ? '終日' : `${hm(e.start)}–${hm(e.end)}`} ${e.summary}`
+      + (e.meetLink ? ' 🎥' : '') + (e.location ? ` 📍${e.location}` : ''));
+  }
+
+  const todos = [];
+  for (const l of a.taskLists) for (const t of l.tasks) if (!t.completed) todos.push(t);
+  todos.sort((x, y) => (x.due || '9999').localeCompare(y.due || '9999'));
+  out.push('', `【やるべきタスク】 残り ${todos.length}件`);
+  if (!todos.length) out.push('・未処理のタスクはありません。');
+  for (const t of todos) {
+    const over = t.due && t.due < a.date;
+    out.push(`・${t.title}` + (t.due ? `(期日 ${t.due}${over ? ' ⚠期限切れ' : ''})` : ''));
+  }
+
+  const hints = [];
+  if (timed.some((e) => e.meetLink)) hints.push('オンライン会議あり → 事前に接続確認・共有資料の準備を。');
+  if (timed.some((e) => e.location)) hints.push('外出/移動を伴う予定あり → 出発時刻と持ち物の確認を。');
+  if (todos.some((t) => t.due && t.due < a.date)) hints.push('期限切れタスクあり → 今日、最優先で対応を。');
+  if (hints.length) { out.push('', '【準備・アドバイス】'); for (const h of hints) out.push('・' + h); }
+  return note + out.join('\n');
 }
 
 function readJsonBody(req) {
@@ -548,6 +667,67 @@ const server = http.createServer((req, res) => {
       })
       .then((t) => { agendaCache = { at: 0, data: null }; sendJson(res, 200, { ok: true, task: t }); })
       .catch((e) => sendJson(res, e.status === 401 ? 401 : 500, { ok: false, error: String(e.message) }));
+    return;
+  }
+
+  /* ── 秘書アシスタント ─────────────────────── */
+  if (url.pathname === '/api/secretary/status') {
+    const { apiKey, model } = loadAnthropicConfig();
+    const creds = loadGoogleCreds();
+    const tok = loadGoogleToken();
+    sendJson(res, 200, {
+      configured: !!apiKey,
+      model,
+      calendarLinked: !!(creds && tok && tok.refresh_token),
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/secretary/chat') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const msgs = Array.isArray(body.messages) ? body.messages : [];
+        const clean = msgs
+          .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .slice(-20)
+          .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+        if (!clean.length || clean[clean.length - 1].role !== 'user') {
+          throw new Error('ユーザーのメッセージがありません');
+        }
+        const ctx = await secretaryContext();
+        const { apiKey, model } = loadAnthropicConfig();
+        if (!apiKey) {
+          sendJson(res, 200, { reply: fallbackSecretaryReply(ctx), fallback: true, linked: ctx.linked });
+          return;
+        }
+        const ar = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            system: secretarySystemPrompt(ctx.text),
+            messages: clean,
+          }),
+        });
+        if (!ar.ok) {
+          const t = await ar.text();
+          sendJson(res, 502, { error: `Anthropic API ${ar.status}: ${t.slice(0, 200)}` });
+          return;
+        }
+        const j = await ar.json();
+        const reply = (j.content || [])
+          .filter((c) => c.type === 'text')
+          .map((c) => c.text)
+          .join('\n')
+          .trim() || '(応答がありませんでした)';
+        sendJson(res, 200, { reply, model, linked: ctx.linked });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;
   }
 
