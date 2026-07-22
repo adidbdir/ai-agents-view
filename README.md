@@ -16,7 +16,10 @@ Claude Code / AI エージェントのセッションを、アイソメトリッ
 - **詳細パネル** — デスクをクリックすると表示
   - 直近30日の実行タイムライン(定期実行の頻度を棒グラフ+セッション開始マーカーで把握)
   - セッション一覧: AIタイトル / モデル / ブランチ / メッセージ数 / トークン数 / ツール実行内訳
-- **完全ローカル** — 外部通信・依存パッケージなし(Node.js 標準ライブラリのみ)
+- **今日の予定 / タスク管理(任意)** — Google カレンダーと Google ToDo (Tasks) に連携
+  - 左上「📅 今日の予定」パネルに、今日のスケジュールのまとめ(進行中・次の予定・残タスク数)と予定一覧を表示
+  - Google ToDo のタスクをチェックで完了/未完了に切替、その場で追加(期日=今日)も可能
+- **完全ローカル** — 依存パッケージなし(Node.js 標準ライブラリのみ)。外部通信は任意の Google 連携を有効にした場合の Google API のみ
 
 ## 使い方
 
@@ -59,6 +62,29 @@ Claude アカウント経由で他マシンのログを取得する API はあ�
 
 > 補足: ネットワーク集約を使わない代替として、他マシンの `~/.claude/projects` を
 > Syncthing / iCloud Drive 等で同期し、同期先を読む方法もあります(リアルタイム性は落ちます)。
+
+## Google カレンダー / ToDo 連携(任意)
+
+左上の「📅 今日の予定」から、Google カレンダーの今日のスケジュールと Google ToDo のタスクを表示・管理できます。
+利用には自分の Google Cloud プロジェクトで OAuth クライアントを一度だけ作成します(無料・約5分):
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) でプロジェクトを作成
+2. 「APIとサービス → ライブラリ」で **Google Calendar API** と **Google Tasks API** を有効化
+3. 「認証情報 → 認証情報を作成 → OAuth クライアント ID」で種類 **デスクトップアプリ** を選択して作成
+   - 初回は「OAuth 同意画面」の設定を求められます。User Type は **外部** でよく、テストユーザーに自分の Gmail アドレスを追加してください
+4. JSON をダウンロードし、このリポジトリ直下に `google-credentials.json` として保存
+   (環境変数 `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` でも指定可)
+5. ダッシュボード左上「📅 今日の予定」→「Google と連携する」→ ブラウザで許可
+
+- スコープは `calendar.readonly`(予定は読み取りのみ)と `tasks`(タスクの完了切替・追加のため読み書き)です
+- トークンは `google-token.json` としてローカルにのみ保存されます(`google-credentials.json` と共に gitignore 済み)
+- 連携の許可操作は、サーバーが動いている PC のブラウザ(`http://localhost:4370`)から行ってください(OAuth のリダイレクト先が localhost のため)
+- 連携を解除するには `google-token.json` を削除してください
+
+| API | 用途 |
+|---|---|
+| Calendar API (`calendars/primary/events`) | 今日 0:00〜24:00 の予定(読み取りのみ) |
+| Tasks API (`users/@me/lists`, `lists/{id}/tasks`) | タスク一覧・完了切替・追加(未完了 + 今日完了分を表示) |
 
 ## データソース
 

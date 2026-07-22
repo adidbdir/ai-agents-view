@@ -288,6 +288,146 @@ async function collectAll() {
   return data;
 }
 
+/* ══════════ Google カレンダー / ToDo (Tasks) 連携 ══════════
+ * OAuth 2.0 (デスクトップアプリ / ループバック) を外部ライブラリなしで実装。
+ *   1. Google Cloud Console で OAuth クライアント(種類: デスクトップアプリ)を作成
+ *   2. google-credentials.json に保存 (ダウンロードした JSON そのままで可)
+ *   3. ダッシュボードの「Google と連携」→ ブラウザで許可 → google-token.json に保存
+ * トークン・認証情報はこのフォルダ内にのみ保存され、Google 以外への送信はない。
+ */
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks';
+const CRED_PATH = path.join(__dirname, 'google-credentials.json');
+const TOKEN_PATH = path.join(__dirname, 'google-token.json');
+
+function loadGoogleCreds() {
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
+  }
+  try {
+    const j = JSON.parse(fs.readFileSync(CRED_PATH, 'utf8'));
+    const c = j.installed || j.web || j;
+    if (c.client_id && c.client_secret) return { client_id: c.client_id, client_secret: c.client_secret };
+  } catch { /* 未設定 */ }
+  return null;
+}
+
+function loadGoogleToken() {
+  try { return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8')); } catch { return null; }
+}
+function saveGoogleToken(t) {
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify(t, null, 2), { mode: 0o600 });
+}
+
+async function getGoogleAccessToken() {
+  const creds = loadGoogleCreds();
+  const tok = loadGoogleToken();
+  if (!creds || !tok || !tok.refresh_token) return null;
+  if (tok.access_token && tok.expiry && Date.now() < tok.expiry - 60e3) return tok.access_token;
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: creds.client_id,
+      client_secret: creds.client_secret,
+      refresh_token: tok.refresh_token,
+      grant_type: 'refresh_token',
+    }),
+  });
+  if (!r.ok) throw new Error('トークン更新に失敗: ' + (await r.text()).slice(0, 200));
+  const j = await r.json();
+  tok.access_token = j.access_token;
+  tok.expiry = Date.now() + (j.expires_in || 3600) * 1000;
+  saveGoogleToken(tok);
+  return tok.access_token;
+}
+
+async function gApi(url, opts = {}) {
+  const token = await getGoogleAccessToken();
+  if (!token) { const e = new Error('unauthorized'); e.status = 401; throw e; }
+  const r = await fetch(url, {
+    ...opts,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  if (!r.ok) {
+    const e = new Error(`Google API ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    e.status = r.status;
+    throw e;
+  }
+  return r.status === 204 ? null : r.json();
+}
+
+function localDateStr(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 今日の予定 (カレンダー) + タスク (ToDo) を集める。30秒キャッシュ。 */
+let agendaCache = { at: 0, data: null };
+async function fetchAgenda() {
+  if (agendaCache.data && Date.now() - agendaCache.at < 30e3) return agendaCache.data;
+
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart.getTime() + 86400e3);
+  const evUrl = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?' + new URLSearchParams({
+    timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString(),
+    singleEvents: 'true', orderBy: 'startTime', maxResults: '50',
+  });
+  const [evRes, listRes] = await Promise.all([
+    gApi(evUrl),
+    gApi('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=20'),
+  ]);
+
+  const events = (evRes.items || [])
+    .filter((e) => e.status !== 'cancelled')
+    .map((e) => ({
+      id: e.id,
+      summary: e.summary || '(無題)',
+      allDay: !!(e.start && e.start.date),
+      start: e.start?.dateTime || e.start?.date || null,
+      end: e.end?.dateTime || e.end?.date || null,
+      location: e.location || null,
+      meetLink: e.hangoutLink || null,
+    }));
+
+  const today = localDateStr();
+  const taskLists = await Promise.all((listRes.items || []).map(async (l) => {
+    const tr = await gApi(
+      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(l.id)}/tasks?` +
+      new URLSearchParams({ showCompleted: 'true', showHidden: 'true', maxResults: '100' }));
+    const tasks = (tr.items || [])
+      .filter((t) => t.title)
+      // 未完了すべて + 今日完了したものだけ表示
+      .filter((t) => t.status !== 'completed' || (t.completed || '').slice(0, 10) === today)
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        notes: t.notes || null,
+        due: t.due ? t.due.slice(0, 10) : null,
+        completed: t.status === 'completed',
+      }));
+    tasks.sort((a, b) => (a.completed === b.completed ? 0 : a.completed ? 1 : -1)
+      || (a.due || '9999').localeCompare(b.due || '9999'));
+    return { id: l.id, title: l.title, tasks };
+  }));
+
+  const data = { generatedAt: Date.now(), date: today, events, taskLists };
+  agendaCache = { at: Date.now(), data };
+  return data;
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let b = '';
+    req.on('data', (c) => { b += c; if (b.length > 1e6) req.destroy(); });
+    req.on('end', () => { try { resolve(JSON.parse(b || '{}')); } catch (e) { reject(e); } });
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(obj));
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -298,6 +438,118 @@ const MIME = {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+
+  /* ── Google 連携 ─────────────────────────── */
+  if (url.pathname === '/api/agenda') {
+    const creds = loadGoogleCreds();
+    const tok = loadGoogleToken();
+    if (!creds) { sendJson(res, 200, { configured: false, authorized: false }); return; }
+    if (!tok || !tok.refresh_token) { sendJson(res, 200, { configured: true, authorized: false }); return; }
+    fetchAgenda()
+      .then((data) => sendJson(res, 200, { configured: true, authorized: true, ...data }))
+      .catch((e) => {
+        if (e.status === 401 || e.status === 403) {
+          sendJson(res, 200, { configured: true, authorized: false, error: String(e.message) });
+        } else {
+          sendJson(res, 502, { configured: true, authorized: true, error: String(e.message) });
+        }
+      });
+    return;
+  }
+
+  if (url.pathname === '/auth/google') {
+    const creds = loadGoogleCreds();
+    if (!creds) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('google-credentials.json がありません。README の手順で OAuth クライアントを作成してください。');
+      return;
+    }
+    const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+      client_id: creds.client_id,
+      redirect_uri: `http://localhost:${PORT}/oauth2callback`,
+      response_type: 'code',
+      scope: GOOGLE_SCOPES,
+      access_type: 'offline',
+      prompt: 'consent',
+    });
+    res.writeHead(302, { Location: authUrl });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === '/oauth2callback') {
+    const code = url.searchParams.get('code');
+    const creds = loadGoogleCreds();
+    if (!code || !creds) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('認証コードがありません: ' + (url.searchParams.get('error') || 'code missing'));
+      return;
+    }
+    fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        redirect_uri: `http://localhost:${PORT}/oauth2callback`,
+        grant_type: 'authorization_code',
+      }),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+        return r.json();
+      })
+      .then((j) => {
+        saveGoogleToken({
+          refresh_token: j.refresh_token,
+          access_token: j.access_token,
+          expiry: Date.now() + (j.expires_in || 3600) * 1000,
+          scope: j.scope,
+        });
+        agendaCache = { at: 0, data: null };
+        res.writeHead(302, { Location: '/' });
+        res.end();
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Google 認証に失敗しました: ' + String(e.message));
+      });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/tasks/toggle') {
+    readJsonBody(req)
+      .then(({ listId, taskId, completed }) => {
+        if (!listId || !taskId) throw new Error('listId / taskId が必要です');
+        return gApi(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(taskId)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(completed
+              ? { status: 'completed' }
+              : { status: 'needsAction', completed: null }),
+          });
+      })
+      .then((t) => { agendaCache = { at: 0, data: null }; sendJson(res, 200, { ok: true, task: t }); })
+      .catch((e) => sendJson(res, e.status === 401 ? 401 : 500, { ok: false, error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/tasks/add') {
+    readJsonBody(req)
+      .then(({ listId, title, due }) => {
+        if (!listId || !title) throw new Error('listId / title が必要です');
+        const body = { title: String(title).slice(0, 200) };
+        if (due) body.due = `${due}T00:00:00.000Z`; // Tasks API は日付のみ有効
+        return gApi(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks`,
+          { method: 'POST', body: JSON.stringify(body) });
+      })
+      .then((t) => { agendaCache = { at: 0, data: null }; sendJson(res, 200, { ok: true, task: t }); })
+      .catch((e) => sendJson(res, e.status === 401 ? 401 : 500, { ok: false, error: String(e.message) }));
+    return;
+  }
 
   if (url.pathname === '/api/data') {
     // ?local=1 はピアからの問い合わせ: 再帰的なピア取得を防ぐためローカルのみ返す

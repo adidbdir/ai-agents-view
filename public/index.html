@@ -149,11 +149,94 @@
   .tool { font-size: 10.5px; font-family: ui-monospace, "SF Mono", monospace;
           background: var(--navy); color: #cfe9f5; border-radius: 6px; padding: 3px 8px; }
   .empty { color: var(--gray-txt); font-size: 13px; text-align: center; padding: 30px 0; }
+
+  /* ── Google 今日の予定パネル ─────────────────── */
+  .gcal-btn {
+    position: absolute; top: 22px; left: 26px; z-index: 20;
+    background: var(--card); border: none; border-radius: 14px;
+    padding: 10px 16px; cursor: pointer; text-align: left;
+    box-shadow: 0 4px 14px rgba(40,60,90,.10);
+    font-family: inherit; color: var(--navy);
+  }
+  .gcal-btn:hover { box-shadow: 0 6px 18px rgba(40,60,90,.16); }
+  .gcal-btn .b1 { font-size: 13.5px; font-weight: 800; }
+  .gcal-btn .b2 { font-size: 10.5px; color: var(--gray-txt); font-weight: 600; margin-top: 2px; }
+  .gcal-btn .b2 .on { color: var(--cyan); }
+
+  .gpanel {
+    position: absolute; top: 0; left: 0; height: 100%; width: 390px; max-width: 92vw;
+    background: rgba(255,255,255,.97); backdrop-filter: blur(10px);
+    box-shadow: 12px 0 40px rgba(30,45,65,.18);
+    transform: translateX(-105%); transition: transform .28s ease;
+    z-index: 31; display: flex; flex-direction: column;
+  }
+  .gpanel.open { transform: translateX(0); }
+  .gpanel .panel-head { position: relative; }
+  .gpanel .close { left: auto; right: 14px; }
+  .gsummary {
+    font-size: 12px; line-height: 1.7; background: #f2f6fa;
+    border-radius: 12px; padding: 10px 14px; color: #3c4c5d;
+  }
+  .gev {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 8px 10px; border-radius: 10px; margin-bottom: 4px;
+    border-left: 3px solid transparent;
+  }
+  .gev .tm { flex: none; width: 84px; font-size: 12px; font-weight: 800; color: var(--slate); padding-top: 1px; }
+  .gev .ttl { font-size: 13px; font-weight: 700; line-height: 1.4; }
+  .gev .sub { font-size: 10.5px; color: var(--gray-txt); margin-top: 2px; word-break: break-all; }
+  .gev .sub a { color: #16758f; }
+  .gev.now  { background: #e2f5fb; border-left-color: var(--cyan); }
+  .gev.next { background: #eef3f8; border-left-color: var(--blue); }
+  .gev.past { opacity: .45; }
+  .gev .tag { font-size: 9.5px; font-weight: 800; border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; }
+  .gev.now  .tag { background: var(--cyan); color: #06303c; }
+  .gev.next .tag { background: var(--blue); color: #fff; }
+
+  .gtask { display: flex; gap: 9px; align-items: flex-start; padding: 6px 4px; }
+  .gtask input[type=checkbox] { width: 16px; height: 16px; margin-top: 1px; accent-color: var(--cyan); cursor: pointer; flex: none; }
+  .gtask .ttl { font-size: 13px; font-weight: 600; line-height: 1.45; }
+  .gtask.done .ttl { text-decoration: line-through; color: var(--gray-txt); font-weight: 500; }
+  .gtask .due { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 7px; margin-left: 6px; background: #eef3f8; color: var(--slate); vertical-align: 1px; }
+  .gtask .due.over { background: #fdecec; color: #c0392b; }
+  .gtask .notes { font-size: 10.5px; color: var(--gray-txt); margin-top: 1px; }
+  .gadd { display: flex; gap: 6px; margin: 6px 0 14px; }
+  .gadd input {
+    flex: 1; font-size: 12.5px; font-family: inherit; padding: 7px 10px;
+    border: 1px solid #d5dde6; border-radius: 10px; background: #fff; color: var(--navy);
+  }
+  .gadd button {
+    border: none; border-radius: 10px; background: var(--navy); color: #fff;
+    font-size: 12px; font-weight: 700; padding: 0 14px; cursor: pointer;
+  }
+  .gconnect {
+    display: block; text-align: center; text-decoration: none;
+    background: linear-gradient(135deg, var(--blue), var(--cyan)); color: #fff;
+    font-size: 14px; font-weight: 800; border-radius: 12px; padding: 12px; margin: 14px 0;
+  }
+  .gsetup { font-size: 12px; line-height: 1.8; color: #3c4c5d; }
+  .gsetup code { background: #eef3f8; border-radius: 5px; padding: 1px 5px; font-size: 11px; }
+  .gsetup ol { padding-left: 18px; }
 </style>
 </head>
 <body>
 <div id="app">
   <div class="title-capsule">AI Agents View<small>CLAUDE CODE SESSION MONITOR</small></div>
+
+  <button class="gcal-btn" id="gcal-btn" onclick="openGPanel()">
+    <div class="b1">📅 今日の予定</div>
+    <div class="b2" id="gcal-sub">Google カレンダー / ToDo</div>
+  </button>
+
+  <div class="gpanel" id="gpanel">
+    <div class="panel-head">
+      <button class="close" onclick="closeGPanel()">✕</button>
+      <div class="pj" id="g-date"></div>
+      <div class="pth">Google カレンダー ・ Google ToDo</div>
+      <div class="badges" id="g-badges"></div>
+    </div>
+    <div class="panel-body" id="g-body"></div>
+  </div>
 
   <svg id="stage" preserveAspectRatio="xMidYMid meet"></svg>
 
@@ -797,8 +880,202 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
+
+/* ══════════ Google 今日の予定 / タスク ══════════ */
+let GDATA = null;
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function evState(e) { // 'past' | 'now' | 'future'
+  if (e.allDay) return 'now';
+  const now = Date.now();
+  if (Date.parse(e.end) <= now) return 'past';
+  if (Date.parse(e.start) <= now) return 'now';
+  return 'future';
+}
+
+async function gtick() {
+  try {
+    const r = await fetch('/api/agenda');
+    GDATA = await r.json();
+  } catch { GDATA = null; }
+  renderGoogle();
+}
+
+function gTaskStats() {
+  let total = 0, done = 0, overdue = 0;
+  for (const l of GDATA.taskLists || []) {
+    for (const t of l.tasks) {
+      total++;
+      if (t.completed) done++;
+      else if (t.due && t.due < todayStr()) overdue++;
+    }
+  }
+  return { total, done, overdue };
+}
+
+/** 今日のまとめ文 */
+function gSummaryHtml() {
+  const evs = GDATA.events || [];
+  const timed = evs.filter((e) => !e.allDay);
+  const nowEv = timed.find((e) => evState(e) === 'now');
+  const nextEv = timed.find((e) => evState(e) === 'future');
+  const { total, done, overdue } = gTaskStats();
+  const parts = [];
+  if (!evs.length) parts.push('今日の予定はありません。');
+  else {
+    let s = `予定は <b>${evs.length}件</b>`;
+    if (timed.length) s += `(${fmtTime(timed[0].start)}〜${fmtTime(timed[timed.length - 1].end)})`;
+    parts.push(s + '。');
+  }
+  if (nowEv) parts.push(`進行中: <b>${esc(nowEv.summary)}</b>(〜${fmtTime(nowEv.end)})。`);
+  if (nextEv) {
+    const min = Math.max(0, Math.round((Date.parse(nextEv.start) - Date.now()) / 60000));
+    const rel = min < 60 ? `あと${min}分` : `あと${Math.floor(min / 60)}時間${min % 60 ? (min % 60) + '分' : ''}`;
+    parts.push(`次は ${fmtTime(nextEv.start)}〜 <b>${esc(nextEv.summary)}</b>(${rel})。`);
+  }
+  if (total) {
+    let s = `タスクは 残り <b>${total - done}件</b> / 完了 ${done}件`;
+    if (overdue) s += `(<span style="color:#c0392b;font-weight:700">期限切れ ${overdue}件</span>)`;
+    parts.push(s + '。');
+  } else parts.push('タスクはありません。');
+  return `<div class="gsummary">${parts.join(' ')}</div>`;
+}
+
+function renderGoogle() {
+  const sub = $('gcal-sub');
+  const d = new Date();
+  $('g-date').textContent =
+    `${d.getMonth() + 1}月${d.getDate()}日(${'日月火水木金土'[d.getDay()]})`;
+
+  if (!GDATA) { sub.textContent = 'サーバーに接続できません'; $('g-body').innerHTML = '<div class="empty">サーバーに接続できません</div>'; $('g-badges').innerHTML = ''; return; }
+
+  if (!GDATA.configured) {
+    sub.textContent = '未設定 — クリックして設定方法を表示';
+    $('g-badges').innerHTML = '<span class="badge">未設定</span>';
+    $('g-body').innerHTML = `
+      <div class="sec-title">セットアップ</div>
+      <div class="gsetup">
+        Google カレンダー / ToDo と連携するには、一度だけ OAuth クライアントの作成が必要です:
+        <ol>
+          <li><a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console</a> でプロジェクトを作成</li>
+          <li>「APIとサービス → ライブラリ」で <b>Google Calendar API</b> と <b>Google Tasks API</b> を有効化</li>
+          <li>「認証情報 → 認証情報を作成 → OAuth クライアント ID」で種類 <b>デスクトップアプリ</b> を選択して作成<br>(初回は OAuth 同意画面の設定が必要。テストユーザーに自分の Gmail を追加)</li>
+          <li>JSON をダウンロードし、このアプリのフォルダに <code>google-credentials.json</code> として保存</li>
+          <li>サーバーを再起動せずそのまま、下の「連携する」から許可</li>
+        </ol>
+        認証情報はこの PC 内(<code>google-token.json</code>)にのみ保存されます。
+      </div>
+      <a class="gconnect" href="/auth/google">Google と連携する</a>`;
+    return;
+  }
+
+  if (!GDATA.authorized) {
+    sub.textContent = '未連携 — クリックして連携';
+    $('g-badges').innerHTML = '<span class="badge">未連携</span>';
+    $('g-body').innerHTML = `
+      <div class="gsetup" style="margin-top:8px">認証情報は設定済みです。Google アカウントの許可を行うと、今日の予定とタスクが表示されます。<br>
+      <span style="color:#8a97a6">※ 連携操作はサーバーが動いている PC のブラウザ(localhost)から行ってください。</span></div>
+      <a class="gconnect" href="/auth/google">Google と連携する</a>
+      ${GDATA.error ? `<div class="gsetup" style="color:#c0392b">${esc(GDATA.error)}</div>` : ''}`;
+    return;
+  }
+
+  const evs = GDATA.events || [];
+  const { total, done, overdue } = gTaskStats();
+  const nowEv = evs.find((e) => !e.allDay && evState(e) === 'now');
+  const nextEv = evs.find((e) => !e.allDay && evState(e) === 'future');
+  sub.innerHTML = `予定 ${evs.length}件 ・ タスク <span class="${done < total ? '' : 'on'}">${done}/${total}</span>`
+    + (nextEv ? ` ・ <span class="on">次 ${fmtTime(nextEv.start)}</span>` : nowEv ? ' ・ <span class="on">進行中</span>' : '');
+  $('g-badges').innerHTML = `
+    <span class="badge ${nowEv ? 'on' : ''}">📅 ${evs.length} 件</span>
+    <span class="badge ${total && done === total ? 'on' : ''}">✓ ${done}/${total} タスク</span>
+    ${overdue ? `<span class="badge" style="background:#c0392b">⚠ 期限切れ ${overdue}</span>` : ''}`;
+
+  let html = gSummaryHtml();
+
+  html += '<div class="sec-title">スケジュール</div>';
+  if (!evs.length) html += '<div class="empty">今日の予定はありません</div>';
+  for (const e of evs) {
+    const st = evState(e);
+    html += `
+    <div class="gev ${e.allDay ? '' : st === 'now' ? 'now' : e === nextEv ? 'next' : st}">
+      <div class="tm">${e.allDay ? '終日' : `${fmtTime(e.start)}–${fmtTime(e.end)}`}</div>
+      <div>
+        <div class="ttl">${esc(e.summary)}${!e.allDay && st === 'now' ? '<span class="tag">進行中</span>' : e === nextEv ? '<span class="tag">次</span>' : ''}</div>
+        ${e.location ? `<div class="sub">📍 ${esc(e.location)}</div>` : ''}
+        ${e.meetLink ? `<div class="sub">🎥 <a href="${esc(e.meetLink)}" target="_blank">Meet に参加</a></div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  for (const l of GDATA.taskLists || []) {
+    html += `<div class="sec-title">タスク — ${esc(l.title)}</div>`;
+    if (!l.tasks.length) html += '<div class="empty" style="padding:8px 0">タスクはありません</div>';
+    for (const t of l.tasks) {
+      const over = !t.completed && t.due && t.due < todayStr();
+      html += `
+      <div class="gtask ${t.completed ? 'done' : ''}">
+        <input type="checkbox" ${t.completed ? 'checked' : ''}
+          onchange="toggleTask('${esc(l.id)}','${esc(t.id)}',this.checked)">
+        <div>
+          <div class="ttl">${esc(t.title)}${t.due ? `<span class="due ${over ? 'over' : ''}">${over ? '⚠ ' : ''}${t.due === todayStr() ? '今日' : t.due.slice(5).replace('-', '/')}</span>` : ''}</div>
+          ${t.notes ? `<div class="notes">${esc(t.notes).slice(0, 80)}</div>` : ''}
+        </div>
+      </div>`;
+    }
+    html += `
+    <form class="gadd" onsubmit="return addTask(event,'${esc(l.id)}')">
+      <input type="text" placeholder="今日のタスクを追加..." maxlength="200">
+      <button type="submit">追加</button>
+    </form>`;
+  }
+
+  $('g-body').innerHTML = html;
+}
+
+function openGPanel() { $('gpanel').classList.add('open'); renderGoogle(); }
+function closeGPanel() { $('gpanel').classList.remove('open'); }
+
+async function toggleTask(listId, taskId, completed) {
+  // 楽観的更新 → サーバー反映 → 再取得
+  for (const l of GDATA.taskLists || []) {
+    if (l.id !== listId) continue;
+    const t = l.tasks.find((x) => x.id === taskId);
+    if (t) t.completed = completed;
+  }
+  renderGoogle();
+  try {
+    await fetch('/api/tasks/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listId, taskId, completed }),
+    });
+  } finally { gtick(); }
+}
+
+function addTask(ev, listId) {
+  ev.preventDefault();
+  const input = ev.target.querySelector('input');
+  const title = input.value.trim();
+  if (!title) return false;
+  input.value = '';
+  fetch('/api/tasks/add', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId, title, due: todayStr() }),
+  }).finally(() => gtick());
+  return false;
+}
+
+gtick();
+setInterval(gtick, 60000);
 </script>
 </body>
 </html>

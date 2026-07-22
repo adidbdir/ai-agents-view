@@ -2,3 +2,5 @@ node_modules/
 .DS_Store
 peers.json
 nohup.out
+google-credentials.json
+google-token.json

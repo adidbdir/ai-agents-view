@@ -19,7 +19,11 @@
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:4370/)",
       "Bash(curl -s http://localhost:4370/api/data)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(node --check server.js)",
+      "Bash(node --check /Users/hirayae/ai-agents_view/server.js)",
+      "Bash(git commit -m 'Google カレンダー / ToDo 連携: 今日の予定まとめとタスク管理パネルを追加 *)"
     ]
   }
 }
