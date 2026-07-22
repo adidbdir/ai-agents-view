@@ -150,6 +150,14 @@
           background: var(--navy); color: #cfe9f5; border-radius: 6px; padding: 3px 8px; }
   .empty { color: var(--gray-txt); font-size: 13px; text-align: center; padding: 30px 0; }
 
+  .page-link {
+    position: absolute; top: 22px; right: 26px; z-index: 20;
+    background: var(--card); border-radius: 14px; padding: 10px 16px;
+    text-decoration: none; color: var(--navy); font-size: 13.5px; font-weight: 800;
+    box-shadow: 0 4px 14px rgba(40,60,90,.10);
+  }
+  .page-link:hover { box-shadow: 0 6px 18px rgba(40,60,90,.16); }
+
   /* ── Google 今日の予定パネル ─────────────────── */
   .gcal-btn {
     position: absolute; top: 22px; left: 26px; z-index: 20;
@@ -263,6 +271,8 @@
 <body>
 <div id="app">
   <div class="title-capsule">AI Agents View<small>CLAUDE CODE SESSION MONITOR</small></div>
+
+  <a class="page-link" href="/sessions">📊 セッション一覧</a>
 
   <button class="gcal-btn" id="gcal-btn" onclick="openGPanel()">
     <div class="b1">📅 今日の予定</div>

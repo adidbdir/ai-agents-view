@@ -897,7 +897,9 @@ const server = http.createServer((req, res) => {
   }
 
   // 静的ファイル配信
-  let file = url.pathname === '/' ? '/index.html' : url.pathname;
+  let file = url.pathname === '/' ? '/index.html'
+    : url.pathname === '/sessions' ? '/sessions.html'
+    : url.pathname;
   file = path.normalize(file).replace(/^(\.\.[/\\])+/, '');
   const fp = path.join(PUBLIC_DIR, file);
   if (!fp.startsWith(PUBLIC_DIR)) {

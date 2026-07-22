@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>セッション一覧 — AI Agents View</title>
+<style>
+  :root {
+    --bg-1: #f5f8fc; --bg-2: #e8eef6;
+    --navy: #1d2b3a; --navy-2: #24384d; --slate: #55677a;
+    --cyan: #2fb9dd; --cyan-glow: #59d2f2; --blue: #3a7bd5;
+    --gray-txt: #8a97a6; --card: #ffffff; --line: #e4eaf1;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Hiragino Sans", "Noto Sans JP", -apple-system, "Segoe UI", sans-serif;
+    background: linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+    color: var(--navy); min-height: 100%;
+  }
+  a { color: inherit; }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+
+  /* ── ヘッダー ── */
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .back {
+    text-decoration: none; background: var(--card); border-radius: 12px; padding: 9px 14px;
+    font-weight: 800; font-size: 13px; box-shadow: 0 3px 12px rgba(40,60,90,.08);
+  }
+  .back:hover { box-shadow: 0 5px 16px rgba(40,60,90,.14); }
+  h1 { font-size: 22px; font-weight: 800; letter-spacing: .02em; }
+  h1 small { font-size: 11px; font-weight: 600; color: var(--gray-txt); letter-spacing: .12em; display: block; }
+  .updated { margin-left: auto; font-size: 11px; color: var(--gray-txt); }
+
+  /* ── 統計チップ ── */
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .stat {
+    background: var(--card); border-radius: 14px; padding: 10px 18px; min-width: 92px;
+    box-shadow: 0 4px 14px rgba(40,60,90,.08); text-align: center;
+  }
+  .stat .v { font-size: 22px; font-weight: 800; line-height: 1.1; }
+  .stat .v.cyan { color: var(--cyan); }
+  .stat .k { font-size: 10px; color: var(--gray-txt); font-weight: 700; letter-spacing: .05em; margin-top: 2px; }
+
+  /* ── コントロール ── */
+  .controls {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 18px;
+    background: var(--card); border-radius: 14px; padding: 12px 16px; box-shadow: 0 3px 12px rgba(40,60,90,.06);
+  }
+  .controls label { font-size: 12px; color: var(--slate); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .controls select, .controls input[type=text] {
+    font-family: inherit; font-size: 12.5px; border: 1px solid #d5dde6; border-radius: 9px;
+    padding: 6px 9px; background: #fff; color: var(--navy);
+  }
+  .controls input[type=text] { min-width: 190px; }
+  .seg { display: flex; background: #eef3f8; border-radius: 10px; padding: 3px; }
+  .seg button {
+    border: none; background: none; font-family: inherit; font-size: 12.5px; font-weight: 700;
+    color: var(--slate); padding: 6px 14px; border-radius: 8px; cursor: pointer;
+  }
+  .seg button.on { background: var(--card); color: var(--navy); box-shadow: 0 2px 6px rgba(40,60,90,.12); }
+  .controls .chk { cursor: pointer; }
+  .spacer { flex: 1; }
+
+  /* ── 実行中セクション ── */
+  .running-wrap { margin-bottom: 20px; }
+  .sec-h { font-size: 12px; font-weight: 800; color: var(--gray-txt); letter-spacing: .1em; margin: 0 2px 8px; }
+  .run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+  .run-card {
+    background: linear-gradient(135deg, #eafaff, #ffffff); border: 1px solid #bfeaf7;
+    border-radius: 14px; padding: 12px 14px; position: relative; overflow: hidden;
+  }
+  .run-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--cyan);
+  }
+  .run-card .rt { font-size: 13.5px; font-weight: 800; line-height: 1.35; padding-left: 6px; }
+  .run-card .rp { font-size: 11px; color: var(--slate); margin: 3px 0 8px 6px; word-break: break-all; }
+  .live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cyan);
+          box-shadow: 0 0 0 0 rgba(47,185,221,.6); animation: lp 1.6s infinite; margin-right: 4px; vertical-align: 1px; }
+  @keyframes lp { 0% { box-shadow: 0 0 0 0 rgba(47,185,221,.5); } 70% { box-shadow: 0 0 0 7px rgba(47,185,221,0); } 100% { box-shadow: 0 0 0 0 rgba(47,185,221,0); } }
+
+  /* ── パネル ── */
+  .panel { background: var(--card); border-radius: 16px; box-shadow: 0 4px 18px rgba(40,60,90,.08); padding: 16px 18px; }
+
+  /* ── ガントチャート ── */
+  .gantt-axis, .grow { display: grid; grid-template-columns: 250px 1fr; align-items: center; }
+  .gantt-axis { position: sticky; top: 0; background: var(--card); z-index: 2; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+  .axis-spacer { font-size: 11px; color: var(--gray-txt); font-weight: 700; }
+  .axis-track { position: relative; height: 16px; }
+  .axis-track .tk { position: absolute; top: 0; font-size: 10px; color: var(--gray-txt); transform: translateX(-50%); white-space: nowrap; }
+  .axis-track .tk:first-child { transform: translateX(0); }
+  .axis-track .tk:last-child { transform: translateX(-100%); }
+
+  .gitem { border-bottom: 1px solid #f0f3f7; }
+  .grow { padding: 5px 0; cursor: pointer; }
+  .grow:hover { background: #f7fafc; }
+  .glabel { padding-right: 12px; overflow: hidden; }
+  .glabel .n { font-size: 12.5px; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .glabel .p { font-size: 10px; color: var(--gray-txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gtrack {
+    position: relative; height: 22px; border-radius: 6px;
+    background-image: repeating-linear-gradient(90deg, #eef2f6 0 1px, transparent 1px 12.5%);
+  }
+  .gbar { position: absolute; top: 3px; height: 16px; border-radius: 5px; min-width: 3px; }
+  .gbar.active { background: linear-gradient(90deg, #2fb9dd, #59d2f2); box-shadow: 0 0 8px rgba(47,185,221,.6); }
+  .gbar.recent { background: var(--blue); }
+  .gbar.idle   { background: #c2cdd9; }
+  .gbar .cap { position: absolute; right: -6px; top: 50%; transform: translate(100%,-50%); font-size: 9.5px; color: var(--gray-txt); white-space: nowrap; }
+
+  .grp-h { font-size: 12px; font-weight: 800; color: var(--navy-2); margin: 12px 2px 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .grp-h:first-child { border-top: none; padding-top: 0; }
+
+  /* ── 展開詳細 ── */
+  .detail { padding: 4px 4px 14px 254px; font-size: 12px; color: var(--slate); }
+  .detail .fp { background: #f4f7fa; border-radius: 8px; padding: 8px 10px; margin: 6px 0; color: #3c4c5d; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { font-size: 10.5px; font-weight: 600; color: var(--slate); background: #eef3f8; border-radius: 999px; padding: 3px 9px; }
+  .chip.model { background: #e2f5fb; color: #16758f; }
+  .chip.tok { background: #eef7f0; color: #2e7d4f; }
+  .tools { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .tool { font-size: 10px; font-family: ui-monospace, "SF Mono", monospace; background: var(--navy); color: #cfe9f5; border-radius: 6px; padding: 2px 7px; }
+  .agn { font-size: 11px; color: #16758f; margin-top: 5px; }
+
+  /* ── リストビュー ── */
+  .list-item { border-bottom: 1px solid #f0f3f7; padding: 12px 4px; }
+  .li-head { display: flex; align-items: flex-start; gap: 10px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; margin-top: 4px; }
+  .dot.active { background: var(--cyan); box-shadow: 0 0 7px var(--cyan-glow); }
+  .dot.recent { background: var(--blue); }
+  .dot.idle   { background: #b3bfcc; }
+  .li-title { flex: 1; }
+  .li-title .n { font-size: 14px; font-weight: 700; line-height: 1.35; }
+  .li-title .p { font-size: 11px; color: var(--gray-txt); margin-top: 2px; word-break: break-all; }
+  .li-when { font-size: 11px; color: var(--gray-txt); text-align: right; white-space: nowrap; flex: none; }
+
+  .empty { text-align: center; color: var(--gray-txt); font-size: 13px; padding: 44px 0; }
+  .host-tag { font-size: 9.5px; font-weight: 800; background: #eae4f6; color: #6d4a86; border-radius: 999px; padding: 2px 7px; margin-left: 6px; vertical-align: 1px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="back" href="/">← オフィス</a>
+    <h1>セッション一覧<small>SESSIONS TIMELINE & SUMMARY</small></h1>
+    <div class="updated" id="updated">読み込み中…</div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="controls">
+    <div class="seg" id="view-seg">
+      <button data-view="chart" class="on">📊 タイムチャート</button>
+      <button data-view="list">☰ リスト</button>
+    </div>
+    <label>期間
+      <select id="range">
+        <option value="1">24時間</option>
+        <option value="7" selected>7日</option>
+        <option value="30">30日</option>
+        <option value="all">すべて</option>
+      </select>
+    </label>
+    <label>並び替え
+      <select id="sort">
+        <option value="last">最終更新が新しい</option>
+        <option value="first">開始が新しい</option>
+        <option value="tokens">トークンが多い</option>
+        <option value="messages">メッセージが多い</option>
+        <option value="duration">実行時間が長い</option>
+      </select>
+    </label>
+    <label class="chk"><input type="checkbox" id="group"> プロジェクトでまとめる</label>
+    <label class="chk"><input type="checkbox" id="activeOnly"> 実行中のみ</label>
+    <div class="spacer"></div>
+    <input type="text" id="q" placeholder="🔍 タイトル / プロジェクト / モデル…">
+  </div>
+
+  <div class="running-wrap" id="running-wrap"></div>
+
+  <div class="panel" id="panel"><div class="empty">読み込み中…</div></div>
+</div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+
+let DATA = null;
+let view = 'chart';
+const expanded = new Set();
+
+/* ── ユーティリティ ── */
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function fmtNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n || 0);
+}
+function timeAgo(ms) {
+  if (!ms) return '—';
+  const d = (Date.now() - ms) / 1000;
+  if (d < 60) return 'たった今';
+  if (d < 3600) return Math.floor(d / 60) + '分前';
+  if (d < 86400) return Math.floor(d / 3600) + '時間前';
+  return Math.floor(d / 86400) + '日前';
+}
+function fmtDur(ms) {
+  if (!ms || ms < 0) return '—';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return '1分未満';
+  if (m < 60) return m + '分';
+  const h = Math.floor(m / 60), mm = m % 60;
+  if (h < 24) return mm ? `${h}時間${mm}分` : `${h}時間`;
+  const dys = Math.floor(h / 24), hh = h % 24;
+  return hh ? `${dys}日${hh}時間` : `${dys}日`;
+}
+function fmtClock(ms, withDate) {
+  const d = new Date(ms);
+  const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return withDate ? `${d.getMonth() + 1}/${d.getDate()} ${t}` : t;
+}
+function fmtDate(ms) { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()}`; }
+
+/* ── データ整形: 全プロジェクトのセッションを平坦化 ── */
+function allSessions() {
+  const out = [];
+  for (const p of (DATA && DATA.projects) || []) {
+    for (const s of p.sessions || []) {
+      const firstMs = s.firstTs ? Date.parse(s.firstTs) : s.fileMtime;
+      const lastMs = s.lastTs ? Date.parse(s.lastTs) : s.fileMtime;
+      out.push({
+        ...s, firstMs, lastMs,
+        project: p.name, projectId: p.id || p.dirName,
+        host: p.host, remote: p.remote,
+        msgs: (s.userMessages || 0) + (s.assistantMessages || 0),
+        durMs: (lastMs && firstMs) ? Math.max(0, lastMs - firstMs) : 0,
+      });
+    }
+  }
+  return out;
+}
+
+function rangeDays() { const v = $('range').value; return v === 'all' ? Infinity : Number(v); }
+
+function domain(sessions) {
+  const now = Date.now();
+  const days = rangeDays();
+  if (isFinite(days)) return [now - days * 86400e3, now];
+  let min = now;
+  for (const s of sessions) if (s.firstMs && s.firstMs < min) min = s.firstMs;
+  if (min >= now) min = now - 86400e3;
+  return [min - (now - min) * 0.02, now];
+}
+
+function filtered() {
+  let s = allSessions();
+  const days = rangeDays();
+  const now = Date.now();
+  if (isFinite(days)) s = s.filter((x) => x.lastMs && now - x.lastMs < days * 86400e3);
+  if ($('activeOnly').checked) s = s.filter((x) => x.status === 'active');
+  const q = $('q').value.trim().toLowerCase();
+  if (q) s = s.filter((x) =>
+    [x.title, x.project, x.model, x.gitBranch, x.sessionId, x.firstPrompt, x.host]
+      .some((f) => f && String(f).toLowerCase().includes(q)));
+  const sort = $('sort').value;
+  const cmp = {
+    last: (a, b) => b.lastMs - a.lastMs,
+    first: (a, b) => b.firstMs - a.firstMs,
+    tokens: (a, b) => (b.outputTokens || 0) - (a.outputTokens || 0),
+    messages: (a, b) => b.msgs - a.msgs,
+    duration: (a, b) => b.durMs - a.durMs,
+  }[sort];
+  s.sort(cmp);
+  return s;
+}
+
+const STATUS_JA = { active: '稼働中', recent: '直近実行', idle: '待機中' };
+
+/* ── 統計 ── */
+function renderStats() {
+  const s = allSessions();
+  const active = s.filter((x) => x.status === 'active').length;
+  const runningAgents = s.reduce((a, x) => a + (x.runningAgents || 0), 0);
+  const hosts = new Set(s.map((x) => x.host).filter(Boolean)).size;
+  const projects = new Set(s.map((x) => x.projectId)).size;
+  const out = s.reduce((a, x) => a + (x.outputTokens || 0), 0);
+  const tools = s.reduce((a, x) => a + (x.totalToolCalls || 0), 0);
+  $('stats').innerHTML = `
+    <div class="stat"><div class="v">${s.length}</div><div class="k">セッション</div></div>
+    <div class="stat"><div class="v cyan">${active}</div><div class="k">実行中</div></div>
+    <div class="stat"><div class="v cyan">${runningAgents}</div><div class="k">実行中エージェント</div></div>
+    ${hosts > 1 ? `<div class="stat"><div class="v">${hosts}</div><div class="k">ホスト</div></div>` : ''}
+    <div class="stat"><div class="v">${projects}</div><div class="k">プロジェクト</div></div>
+    <div class="stat"><div class="v">${fmtNum(tools)}</div><div class="k">ツール実行</div></div>
+    <div class="stat"><div class="v">${fmtNum(out)}</div><div class="k">出力トークン</div></div>`;
+}
+
+/* ── 実行中セクション ── */
+function renderRunning() {
+  const running = allSessions().filter((x) => x.status === 'active')
+    .sort((a, b) => b.lastMs - a.lastMs);
+  if (!running.length) { $('running-wrap').innerHTML = ''; return; }
+  let html = '<div class="sec-h">● 実行中のセッション</div><div class="run-grid">';
+  for (const s of running) {
+    const ags = (s.agents || []).filter((a) => a.running);
+    html += `
+      <div class="run-card">
+        <div class="rt"><span class="live"></span>${esc(s.title || s.firstPrompt || s.sessionId.slice(0, 8))}</div>
+        <div class="rp">${esc(s.project)}${s.remote ? `<span class="host-tag">@${esc(s.host)}</span>` : ''} ・ 開始 ${timeAgo(s.firstMs)}</div>
+        <div class="chips">
+          ${s.model ? `<span class="chip model">${esc(s.model)}</span>` : ''}
+          <span class="chip">💬 ${s.msgs}</span>
+          <span class="chip tok">⚡ ${fmtNum(s.outputTokens)} tok</span>
+          <span class="chip">⏱ ${fmtDur(s.durMs)}</span>
+          ${s.runningAgents ? `<span class="chip" style="background:#e2f5fb;color:#16758f">🤖 ${s.runningAgents} 稼働</span>` : ''}
+        </div>
+        ${ags.map((a) => `<div class="agn">▶ ${esc(a.agentType || 'agent')}: ${esc((a.description || '').slice(0, 46))}</div>`).join('')}
+      </div>`;
+  }
+  html += '</div>';
+  $('running-wrap').innerHTML = html;
+}
+
+/* ── メイン(チャート / リスト) ── */
+function render() {
+  renderStats();
+  renderRunning();
+  const s = filtered();
+  $('updated').textContent = DATA
+    ? `更新: ${new Date(DATA.generatedAt).toLocaleTimeString('ja-JP')} ・ ${s.length} 件表示`
+    : '接続エラー';
+  const badPeers = (DATA && DATA.peers || []).filter((x) => !x.ok);
+  if (badPeers.length) $('updated').textContent += ` ・ ⚠ 接続不可: ${badPeers.map((x) => x.host || x.url).join(', ')}`;
+
+  if (!s.length) { $('panel').innerHTML = '<div class="empty">該当するセッションがありません</div>'; return; }
+  if (view === 'chart') renderChart(s);
+  else renderList(s);
+}
+
+function detailHtml(s) {
+  const tools = Object.entries(s.toolCalls || {}).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  const ags = (s.agents || []);
+  return `<div class="detail">
+    ${s.firstPrompt ? `<div class="fp">${esc(s.firstPrompt)}</div>` : ''}
+    <div class="chips">
+      <span class="chip">🕐 ${fmtClock(s.firstMs, true)} 開始</span>
+      <span class="chip">🏁 ${fmtClock(s.lastMs, true)} 最終</span>
+      <span class="chip">⏱ ${fmtDur(s.durMs)}</span>
+      ${s.model ? `<span class="chip model">${esc(s.model)}</span>` : ''}
+      ${s.gitBranch ? `<span class="chip">⎇ ${esc(s.gitBranch)}</span>` : ''}
+      <span class="chip">💬 ${s.msgs}(👤${s.userMessages || 0}/🤖${s.assistantMessages || 0})</span>
+      <span class="chip tok">⚡ 出力 ${fmtNum(s.outputTokens)}</span>
+      <span class="chip tok">⬇ 入力 ${fmtNum(s.inputTokens)}</span>
+      <span class="chip">🔧 ${fmtNum(s.totalToolCalls)}</span>
+      ${s.totalAgents ? `<span class="chip" style="background:#e2f5fb;color:#16758f">🤖 ${s.totalAgents} agents${s.runningAgents ? `(稼働 ${s.runningAgents})` : ''}</span>` : ''}
+      <span class="chip">🆔 ${esc(s.sessionId.slice(0, 8))}</span>
+    </div>
+    ${ags.length ? `<div style="margin-top:6px">${ags.map((a) => `<div class="agn">${a.running ? '▶' : '✔'} ${esc(a.agentType || 'agent')}: ${esc((a.description || '').slice(0, 60))}</div>`).join('')}</div>` : ''}
+    ${tools.length ? `<div class="tools">${tools.map(([n, c]) => `<span class="tool">${esc(n)}×${c}</span>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function renderChart(s) {
+  const [t0, t1] = domain(s);
+  const span = t1 - t0 || 1;
+  const withDate = span > 2 * 86400e3;
+  // 軸目盛り(8分割)
+  let axis = '<div class="gantt-axis"><div class="axis-spacer">セッション</div><div class="axis-track">';
+  for (let i = 0; i <= 8; i++) {
+    const t = t0 + (span * i) / 8;
+    axis += `<div class="tk" style="left:${(i / 8 * 100).toFixed(2)}%">${withDate ? fmtDate(t) : fmtClock(t)}</div>`;
+  }
+  axis += '</div></div>';
+
+  const group = $('group').checked;
+  let rows = '';
+  let lastGroup = null;
+  for (const x of s) {
+    if (group && x.projectId !== lastGroup) {
+      lastGroup = x.projectId;
+      rows += `<div class="grp-h">${esc(x.project)}${x.remote ? `<span class="host-tag">@${esc(x.host)}</span>` : ''}</div>`;
+    }
+    const a = Math.max(x.firstMs, t0);
+    const b = Math.max(a, Math.min(x.lastMs, t1));
+    const left = ((a - t0) / span) * 100;
+    const width = Math.max(0.6, ((b - a) / span) * 100);
+    const label = x.title || x.firstPrompt || x.sessionId.slice(0, 8);
+    const open = expanded.has(x.sessionId);
+    rows += `<div class="gitem">
+      <div class="grow" onclick="toggle('${x.sessionId}')">
+        <div class="glabel">
+          <div class="n">${esc(label)}</div>
+          <div class="p">${esc(x.project)}${x.remote ? `<span class="host-tag">@${esc(x.host)}</span>` : ''}</div>
+        </div>
+        <div class="gtrack">
+          <div class="gbar ${x.status}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%">
+            <span class="cap">${fmtDur(x.durMs)} ・ ${timeAgo(x.lastMs)}</span>
+          </div>
+        </div>
+      </div>
+      ${open ? detailHtml(x) : ''}
+    </div>`;
+  }
+  $('panel').innerHTML = axis + rows;
+}
+
+function renderList(s) {
+  const group = $('group').checked;
+  let html = '';
+  let lastGroup = null;
+  for (const x of s) {
+    if (group && x.projectId !== lastGroup) {
+      lastGroup = x.projectId;
+      html += `<div class="grp-h">${esc(x.project)}${x.remote ? `<span class="host-tag">@${esc(x.host)}</span>` : ''}</div>`;
+    }
+    const label = x.title || x.firstPrompt || x.sessionId.slice(0, 8);
+    const open = expanded.has(x.sessionId);
+    html += `<div class="list-item">
+      <div class="li-head" style="cursor:pointer" onclick="toggle('${x.sessionId}')">
+        <span class="dot ${x.status}"></span>
+        <div class="li-title">
+          <div class="n">${esc(label)}</div>
+          <div class="p">${esc(x.project)}${x.remote ? `<span class="host-tag">@${esc(x.host)}</span>` : ''} ・ ${STATUS_JA[x.status]}</div>
+          <div class="chips">
+            ${x.model ? `<span class="chip model">${esc(x.model)}</span>` : ''}
+            ${x.gitBranch ? `<span class="chip">⎇ ${esc(x.gitBranch)}</span>` : ''}
+            <span class="chip">💬 ${x.msgs}</span>
+            <span class="chip tok">⚡ ${fmtNum(x.outputTokens)} tok</span>
+            <span class="chip">🔧 ${fmtNum(x.totalToolCalls)}</span>
+            <span class="chip">⏱ ${fmtDur(x.durMs)}</span>
+            ${x.totalAgents ? `<span class="chip" style="background:#e2f5fb;color:#16758f">🤖 ${x.totalAgents}</span>` : ''}
+          </div>
+        </div>
+        <div class="li-when">${fmtClock(x.firstMs, true)}<br>〜 ${timeAgo(x.lastMs)}</div>
+      </div>
+      ${open ? detailHtml(x) : ''}
+    </div>`;
+  }
+  $('panel').innerHTML = html;
+}
+
+function toggle(id) {
+  if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  render();
+}
+
+/* ── データ取得ループ ── */
+let lastKey = null;
+async function tick() {
+  try {
+    const r = await fetch('/api/data');
+    DATA = await r.json();
+    const key = JSON.stringify(DATA.projects);
+    if (key !== lastKey) { lastKey = key; render(); }
+    else $('updated').textContent = `更新: ${new Date(DATA.generatedAt).toLocaleTimeString('ja-JP')}`;
+  } catch {
+    $('updated').textContent = '接続エラー: サーバーを確認してください';
+  }
+}
+
+// コントロール
+$('view-seg').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  view = b.dataset.view;
+  [...$('view-seg').children].forEach((c) => c.classList.toggle('on', c === b));
+  render();
+});
+for (const id of ['range', 'sort', 'group', 'activeOnly']) $(id).addEventListener('change', render);
+$('q').addEventListener('input', render);
+
+tick();
+setInterval(tick, 4000);
+</script>
+</body>
+</html>
