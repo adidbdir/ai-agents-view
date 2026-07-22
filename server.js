@@ -450,42 +450,38 @@ function hm(iso) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** 今日の予定 (カレンダー) + タスク (ToDo) を集める。30秒キャッシュ。 */
-let agendaCache = { at: 0, data: null };
-async function fetchAgenda() {
-  if (agendaCache.data && Date.now() - agendaCache.at < 30e3) return agendaCache.data;
+function mapEvent(e) {
+  return {
+    id: e.id,
+    summary: e.summary || '(無題)',
+    allDay: !!(e.start && e.start.date),
+    start: e.start?.dateTime || e.start?.date || null,
+    end: e.end?.dateTime || e.end?.date || null,
+    location: e.location || null,
+    meetLink: e.hangoutLink || null,
+  };
+}
 
-  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(dayStart.getTime() + 86400e3);
-  const evUrl = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?' + new URLSearchParams({
-    timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString(),
-    singleEvents: 'true', orderBy: 'startTime', maxResults: '50',
+/** 指定期間のカレンダー予定を取得する(繰り返しは展開・開始時刻順) */
+async function fetchCalendarEvents(timeMin, timeMax, maxResults = 100) {
+  const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?' + new URLSearchParams({
+    timeMin: timeMin.toISOString(), timeMax: timeMax.toISOString(),
+    singleEvents: 'true', orderBy: 'startTime', maxResults: String(maxResults),
   });
-  const [evRes, listRes] = await Promise.all([
-    gApi(evUrl),
-    gApi('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=20'),
-  ]);
+  const res = await gApi(url);
+  return (res.items || []).filter((e) => e.status !== 'cancelled').map(mapEvent);
+}
 
-  const events = (evRes.items || [])
-    .filter((e) => e.status !== 'cancelled')
-    .map((e) => ({
-      id: e.id,
-      summary: e.summary || '(無題)',
-      allDay: !!(e.start && e.start.date),
-      start: e.start?.dateTime || e.start?.date || null,
-      end: e.end?.dateTime || e.end?.date || null,
-      location: e.location || null,
-      meetLink: e.hangoutLink || null,
-    }));
-
+/** 全 ToDo リストのタスク(未完了すべて + 今日完了分)を取得する */
+async function fetchTaskLists() {
+  const listRes = await gApi('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=20');
   const today = localDateStr();
-  const taskLists = await Promise.all((listRes.items || []).map(async (l) => {
+  return Promise.all((listRes.items || []).map(async (l) => {
     const tr = await gApi(
       `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(l.id)}/tasks?` +
       new URLSearchParams({ showCompleted: 'true', showHidden: 'true', maxResults: '100' }));
     const tasks = (tr.items || [])
       .filter((t) => t.title)
-      // 未完了すべて + 今日完了したものだけ表示
       .filter((t) => t.status !== 'completed' || (t.completed || '').slice(0, 10) === today)
       .map((t) => ({
         id: t.id,
@@ -498,39 +494,98 @@ async function fetchAgenda() {
       || (a.due || '9999').localeCompare(b.due || '9999'));
     return { id: l.id, title: l.title, tasks };
   }));
+}
 
-  const data = { generatedAt: Date.now(), date: today, events, taskLists };
+/** 今日の予定 (カレンダー) + タスク (ToDo) を集める。30秒キャッシュ。 */
+let agendaCache = { at: 0, data: null };
+async function fetchAgenda() {
+  if (agendaCache.data && Date.now() - agendaCache.at < 30e3) return agendaCache.data;
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart.getTime() + 86400e3);
+  const [events, taskLists] = await Promise.all([
+    fetchCalendarEvents(dayStart, dayEnd, 50),
+    fetchTaskLists(),
+  ]);
+  const data = { generatedAt: Date.now(), date: localDateStr(), events, taskLists };
   agendaCache = { at: Date.now(), data };
   return data;
 }
 
 /* ══════════ 秘書アシスタント ══════════
- * 今日の予定 (カレンダー) + タスク (ToDo) を文脈として Anthropic API に渡し、
- * 予定のまとめ・やるべきこと・準備の相談に答える。API キー未設定時は定型ブリーフィング。 */
+ * カレンダーの予定(過去〜先の一定期間)+ タスク (ToDo) を文脈として渡し、
+ * 予定のまとめ・やるべきこと・準備の相談に答える。API キー未設定時は定型ブリーフィング。
+ * 期間は SECRETARY_CAL_PAST_DAYS / SECRETARY_CAL_FUTURE_DAYS で調整可(既定 過去7日〜先14日)。 */
+const SEC_PAST_DAYS = Math.max(0, Number(process.env.SECRETARY_CAL_PAST_DAYS || 7));
+const SEC_FUTURE_DAYS = Math.max(1, Number(process.env.SECRETARY_CAL_FUTURE_DAYS || 14));
 
-/** 今日の予定・タスクを LLM 用のテキスト文脈にする */
+const DOW_JA = '日月火水木金土';
+function dowJa(dateStr) { return DOW_JA[new Date(dateStr + 'T00:00:00').getDay()]; }
+function eventDateKey(e) { return e.allDay ? String(e.start).slice(0, 10) : localDateStr(new Date(e.start)); }
+function relDayLabel(dateStr, today) {
+  const diff = Math.round((new Date(dateStr + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400e3);
+  if (diff === 0) return '今日';
+  if (diff === 1) return '明日';
+  if (diff === 2) return '明後日';
+  if (diff === -1) return '昨日';
+  return diff > 0 ? `${diff}日後` : `${-diff}日前`;
+}
+
+/** 秘書用のデータ(広い期間の予定 + タスク)を取得する。30秒キャッシュ。 */
+let secDataCache = { at: 0, data: null };
+async function fetchSecretaryData() {
+  if (secDataCache.data && Date.now() - secDataCache.at < 30e3) return secDataCache.data;
+  const now = new Date();
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+  const timeMin = new Date(todayStart.getTime() - SEC_PAST_DAYS * 86400e3);
+  const timeMax = new Date(todayStart.getTime() + (SEC_FUTURE_DAYS + 1) * 86400e3);
+  const [events, taskLists] = await Promise.all([
+    fetchCalendarEvents(timeMin, timeMax, 250),
+    fetchTaskLists(),
+  ]);
+  const data = { date: localDateStr(now), events, taskLists };
+  secDataCache = { at: Date.now(), data };
+  return data;
+}
+
+/** 予定(期間)・タスクを LLM 用のテキスト文脈にする */
 async function secretaryContext() {
   const creds = loadGoogleCreds();
   const tok = loadGoogleToken();
   if (!creds || !tok || !tok.refresh_token) {
-    return { linked: false, text: 'Google カレンダー / ToDo は未連携のため、今日の予定・タスク情報はありません。' };
+    return { linked: false, text: 'Google カレンダー / ToDo は未連携のため、予定・タスク情報はありません。' };
   }
   let a;
   try {
-    a = await fetchAgenda();
+    a = await fetchSecretaryData();
   } catch (e) {
     return { linked: false, text: `(予定・タスクの取得に失敗しました: ${String(e.message).slice(0, 120)})` };
   }
 
-  const lines = [`日付: ${a.date}`, '', '■ 今日の予定'];
-  if (!a.events.length) lines.push('  なし');
+  const now = new Date();
+  const lines = [
+    `今日: ${a.date} (${dowJa(a.date)}) / 現在時刻: ${hm(now)}`,
+    '',
+    `■ 予定(過去${SEC_PAST_DAYS}日〜先${SEC_FUTURE_DAYS}日)`,
+  ];
+  // 日付ごとにグループ化
+  const groups = new Map();
   for (const e of a.events) {
-    const time = e.allDay ? '終日' : `${hm(e.start)}–${hm(e.end)}`;
-    let l = `  - ${time} ${e.summary}`;
-    if (e.location) l += ` @${e.location}`;
-    if (e.meetLink) l += '（オンライン/Meet）';
-    lines.push(l);
+    const k = eventDateKey(e);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
   }
+  if (!groups.size) lines.push('  この期間の予定はありません');
+  for (const k of [...groups.keys()].sort()) {
+    lines.push(`[${k} (${dowJa(k)}) ${relDayLabel(k, a.date)}]`);
+    for (const e of groups.get(k)) {
+      const time = e.allDay ? '終日' : `${hm(e.start)}–${hm(e.end)}`;
+      let l = `  - ${time} ${e.summary}`;
+      if (e.location) l += ` @${e.location}`;
+      if (e.meetLink) l += '(オンライン/Meet)';
+      lines.push(l);
+    }
+  }
+
   lines.push('', '■ タスク (ToDo)');
   let any = false;
   for (const list of a.taskLists) {
@@ -544,23 +599,28 @@ async function secretaryContext() {
     }
   }
   if (!any) lines.push('  なし');
-  return { linked: true, text: lines.join('\n'), data: a };
+
+  // 定型ブリーフィング(フォールバック)は「今日」に絞ったデータを使う
+  const todayEvents = a.events.filter((e) => eventDateKey(e) === a.date);
+  return { linked: true, text: lines.join('\n'), data: { date: a.date, events: todayEvents, taskLists: a.taskLists } };
 }
 
 function secretarySystemPrompt(ctxText) {
   const now = new Date();
   const nowStr = `${localDateStr(now)} ${hm(now)}`;
   return `あなたはユーザー専属の有能な日本語の秘書です。現在時刻は ${nowStr} です。
-下記「今日の情報」(Google カレンダーの予定と Google ToDo のタスク) を踏まえてユーザーの相談に答えます。
+下記「予定・タスク情報」(Google カレンダーの予定と Google ToDo のタスク) を踏まえてユーザーの相談に答えます。
+予定は今日だけでなく過去〜先の一定期間を日付ごとに渡しているので、「明日の予定」「来週の会議」「先週なにをしていたか」など他の日についても答えられます。
 
 方針:
-- 今日の予定の要点、優先してやるべきタスク、締め切り、各予定に向けて準備すべきものを、具体的かつ実務的に助言する。
+- 予定の要点、優先してやるべきタスク、締め切り、各予定に向けて準備すべきものを、具体的かつ実務的に助言する。
+- 「明日」「今週」などの相対的な指定は、現在時刻を基準に正確な日付へ読み替える(渡した各予定には日付と曜日、今日/明日/N日後 などの相対ラベルが付いている)。
 - 簡潔に。要点は短い箇条書き(・)でまとめ、前置きや定型的な挨拶は最小限にする。
 - 時刻・期日は正確に扱い、「進行中」「次の予定」「期限切れ」を意識する。
-- 情報にないことは推測で断定せず「情報にありません」と述べる。Markdown の見出し(#)は使わない。
+- 渡した期間の外(遠い未来や過去)は情報がない旨を伝える。推測で断定せず「情報にありません」と述べる。Markdown の見出し(#)は使わない。
 - 常に日本語で回答する。
 
-【今日の情報】
+【予定・タスク情報】
 ${ctxText}`;
 }
 

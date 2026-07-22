@@ -125,6 +125,7 @@ ANTHROPIC_API_KEY=sk-ant-... node server.js        # モデル変更は SECRETAR
 
 - モードを固定したいときは `SECRETARY_PROVIDER=cli|api|auto|off`(既定 `auto`)。
 - 予定・タスクの文脈は上記 Google 連携から取得します(未連携なら一般的な相談のみ)。
+- **今日だけでなく過去〜先の予定も相談できます**(「明日の予定は?」「先週の会議は?」など)。既定は過去7日〜先14日。範囲は `SECRETARY_CAL_PAST_DAYS` / `SECRETARY_CAL_FUTURE_DAYS` で変更できます(例: `SECRETARY_CAL_FUTURE_DAYS=30`)。左上「今日の予定」パネルは今日のみの表示です。
 - 既定モデルは `claude-haiku-4-5-20251001`。応答は毎回、その時点の予定・タスクを文脈として送ります。
 - API キーはこの PC 内でのみ使用し、Anthropic 以外へは送信しません(`anthropic-credentials.json` は gitignore 済み)。
 
