@@ -385,6 +385,165 @@ function runClaudeCli({ cli, model, system, prompt }) {
   });
 }
 
+/* ── 探検家(トピック調査)────────────────────
+ * 指定トピックのニュース・論文を Web 検索で調べ、hot トピック/注目論文/
+ * 分野の潮流をまとめる。実行手段は秘書と同じ設定(cli/api)を流用するが、
+ * 秘書と違い Web 検索を有効化する点が異なる。結果は explorer-state.json に
+ * 保存し、週に一度(月曜9時)自動で更新する。 */
+const EXPLORER_STATE_PATH = path.join(__dirname, 'explorer-state.json');
+const EXPLORER_MAX_TOPICS = 8;
+let explorerRunning = false; // 多重実行防止(オンデマンド + 週次で共有)
+
+function loadExplorerState() {
+  try {
+    const j = JSON.parse(fs.readFileSync(EXPLORER_STATE_PATH, 'utf8'));
+    return {
+      topics: Array.isArray(j.topics) ? j.topics.filter((t) => typeof t === 'string') : [],
+      reports: (j.reports && typeof j.reports === 'object') ? j.reports : {},
+      lastWeeklyRun: Number(j.lastWeeklyRun) || 0,
+    };
+  } catch { return { topics: [], reports: {}, lastWeeklyRun: 0 }; }
+}
+function saveExplorerState(s) {
+  try { fs.writeFileSync(EXPLORER_STATE_PATH, JSON.stringify(s, null, 2)); }
+  catch (e) { console.error('explorer-state 保存失敗:', e.message); }
+}
+
+/** 探検家の実行設定。基本は秘書設定を流用し、EXPLORER_* があれば上書きする */
+function loadExplorerConfig() {
+  const base = loadSecretaryConfig();
+  const provider = process.env.EXPLORER_PROVIDER || null;
+  const model = process.env.EXPLORER_MODEL || null;
+  let mode = base.mode;
+  if (provider === 'off') mode = 'off';
+  else if (provider === 'api') mode = base.apiKey ? 'api' : 'off';
+  else if (provider === 'cli') mode = base.cli ? 'cli' : 'off';
+  else if (provider === 'auto') mode = base.apiKey ? 'api' : (base.cli ? 'cli' : 'off');
+  return { mode, apiKey: base.apiKey, model: model || base.model, cli: base.cli };
+}
+
+function researchPrompt(topic) {
+  return `あなたは「${topic}」分野を追う調査担当です。Web 検索を使って直近1週間ほどの最新情報を調べ、日本語の Markdown レポートにまとめてください。
+
+必ず次の3セクションを見出し(## )で構成してください:
+## 🔥 hot なトピック
+いま盛り上がっている話題・ニュースを3〜5個、各1〜2行で。
+## 📄 注目の論文
+arXiv などの新着・話題の論文を3〜5本、「タイトル — 要点(著者/所属)」の形で。可能なら [タイトル](URL) のリンクを付ける。
+## 🌊 分野の潮流
+この分野で進んでいる大きな流れ・トレンドを2〜4個、簡潔に。
+
+- 事実に基づき、憶測は避ける。分からない点は無理に埋めない。
+- 各項目に可能な限り出典リンク([表示テキスト](URL))を付ける。
+- 全体で簡潔に。前置きや結びの挨拶は不要。`;
+}
+
+/** CLI で Web 検索を許可して調査(タイムアウト180秒) */
+function runResearchCli({ cli, model, prompt }) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-p', prompt,
+      '--model', model,
+      '--output-format', 'json',
+      '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      // 秘書と違い Web 検索/取得を許可(調査用途)
+      '--allowedTools', 'WebSearch', 'WebFetch',
+    ];
+    let child;
+    try { child = spawn(cli || 'claude', args, { env: process.env, cwd: os.tmpdir() }); }
+    catch (e) { reject(new Error('起動失敗: ' + e.message)); return; }
+    let out = '', err = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('タイムアウト(180秒)')); }, 180e3);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(timer); reject(new Error('起動失敗: ' + e.message)); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const j = JSON.parse(out);
+        if (j.is_error) return reject(new Error(String(j.result || 'CLI エラー').slice(0, 200)));
+        resolve(String(j.result || '').trim());
+      } catch { reject(new Error((err || out || '応答なし').slice(0, 200))); }
+    });
+  });
+}
+
+/** API で web_search ツールを付けて調査 */
+async function runResearchApi({ apiKey, model, prompt }) {
+  const ar = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+    }),
+  });
+  if (!ar.ok) throw new Error(`Anthropic API ${ar.status}: ${(await ar.text()).slice(0, 200)}`);
+  const j = await ar.json();
+  return (j.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n')
+    .trim();
+}
+
+/** トピックを調査してレポートを返し、結果を explorer-state に保存する */
+async function doResearch(topic) {
+  const cfg = loadExplorerConfig();
+  const prompt = researchPrompt(topic);
+  let report, provider;
+  if (cfg.mode === 'api') {
+    report = await runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt });
+    provider = 'api';
+  } else if (cfg.mode === 'cli') {
+    report = await runResearchCli({ cli: cfg.cli, model: cfg.model, prompt });
+    provider = 'claude-cli';
+  } else {
+    throw new Error('調査には Claude CLI(サブスク)か Anthropic API キーが必要です。秘書アシスタントと同じ設定で有効化できます。');
+  }
+  report = report || '(調査結果が空でした)';
+  const st = loadExplorerState();
+  st.reports[topic] = { report, at: Date.now(), provider };
+  if (!st.topics.includes(topic)) st.topics.unshift(topic);
+  st.topics = st.topics.slice(0, EXPLORER_MAX_TOPICS);
+  saveExplorerState(st);
+  return { topic, report, at: st.reports[topic].at, provider };
+}
+
+/** 直近の「月曜9:00」を跨いでいたら、保存トピックを順次調査する */
+async function checkWeekly() {
+  if (explorerRunning) return;
+  const st = loadExplorerState();
+  if (!st.topics.length) return;
+  const now = new Date();
+  const boundary = new Date(now);
+  boundary.setHours(9, 0, 0, 0);
+  const backToMon = (boundary.getDay() + 6) % 7; // 月曜(1)までの日数
+  boundary.setDate(boundary.getDate() - backToMon);
+  const boundaryMs = boundary.getTime();
+  if (!(st.lastWeeklyRun < boundaryMs && boundaryMs <= now.getTime())) return;
+
+  explorerRunning = true;
+  console.log(`[explorer] 週次調査を開始: ${st.topics.join(', ')}`);
+  try {
+    for (const t of st.topics) {
+      try { await doResearch(t); console.log(`[explorer] 完了: ${t}`); }
+      catch (e) { console.error(`[explorer] 失敗(${t}): ${e.message}`); }
+    }
+  } finally {
+    const s2 = loadExplorerState();
+    s2.lastWeeklyRun = Date.now();
+    saveExplorerState(s2);
+    explorerRunning = false;
+  }
+}
+
 function loadGoogleCreds() {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     return { client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET };
@@ -881,6 +1040,67 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ── 探検家(トピック調査)─────────────────── */
+  if (url.pathname === '/api/explorer/status') {
+    const cfg = loadExplorerConfig();
+    const st = loadExplorerState();
+    const reports = {};
+    for (const [t, r] of Object.entries(st.reports)) reports[t] = { at: r.at, provider: r.provider };
+    sendJson(res, 200, {
+      configured: cfg.mode !== 'off',
+      mode: cfg.mode,
+      model: cfg.model,
+      topics: st.topics,
+      reports,
+      running: explorerRunning,
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/explorer/report') {
+    const topic = url.searchParams.get('topic') || '';
+    const r = loadExplorerState().reports[topic];
+    sendJson(res, 200, r ? { topic, report: r.report, at: r.at, provider: r.provider } : { topic, report: null });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/explorer/research') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const topic = (typeof body.topic === 'string' ? body.topic : '').trim().slice(0, 80);
+        if (!topic) throw new Error('トピックを入力してください');
+        if (explorerRunning) { sendJson(res, 200, { error: '別の調査を実行中です。少し待ってから再度お試しください。', running: true }); return; }
+        explorerRunning = true;
+        try {
+          sendJson(res, 200, await doResearch(topic));
+        } finally { explorerRunning = false; }
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/explorer/topics') {
+    readJsonBody(req)
+      .then((body) => {
+        const topics = Array.isArray(body.topics)
+          ? [...new Set(body.topics
+              .filter((t) => typeof t === 'string')
+              .map((t) => t.trim()).filter(Boolean)
+              .map((t) => t.slice(0, 80)))].slice(0, EXPLORER_MAX_TOPICS)
+          : [];
+        const st = loadExplorerState();
+        st.topics = topics;
+        // トピックから外れたレポートは破棄(チップ削除＝完全削除)
+        const keep = {};
+        for (const t of topics) if (st.reports[t]) keep[t] = st.reports[t];
+        st.reports = keep;
+        saveExplorerState(st);
+        sendJson(res, 200, { ok: true, topics: st.topics });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
   if (url.pathname === '/api/data') {
     // ?local=1 はピアからの問い合わせ: 再帰的なピア取得を防ぐためローカルのみ返す
     const localOnly = url.searchParams.get('local') === '1';
@@ -928,3 +1148,8 @@ server.listen(PORT, () => {
   console.log(`AI Agents View: http://localhost:${PORT}`);
   console.log(`watching: ${PROJECTS_DIR}`);
 });
+
+// 探検家の週次調査(月曜9時)。サーバー起動中のみ動作する。
+const runWeekly = () => checkWeekly().catch((e) => console.error('[explorer] 週次エラー:', e.message));
+runWeekly();
+setInterval(runWeekly, 30 * 60 * 1000);

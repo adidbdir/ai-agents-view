@@ -311,6 +311,57 @@
     cursor: pointer; background: linear-gradient(135deg, #4a2f66, #6d4a86); font-family: inherit; font-size: 13px;
   }
   .sform button:disabled { opacity: .45; cursor: default; }
+
+  /* ── 探検家(トピック調査)───────────────── */
+  .xpanel { width: 440px; }
+  .xpanel .panel-head { position: relative; background: linear-gradient(135deg, #8a5a2b 0%, #1f7a6e 100%); }
+  .xform { display: flex; gap: 8px; padding: 14px 14px 8px; }
+  .xform input {
+    flex: 1; font-family: inherit; font-size: 13px; padding: 9px 12px;
+    border: 1px solid #d5dde6; border-radius: 12px; background: #fff; color: var(--navy);
+  }
+  .xform button {
+    border: none; border-radius: 12px; color: #fff; font-weight: 700; padding: 0 14px;
+    cursor: pointer; background: linear-gradient(135deg, #8a5a2b, #1f7a6e);
+    font-family: inherit; font-size: 13px; white-space: nowrap;
+  }
+  .xform button:disabled { opacity: .45; cursor: default; }
+  .xchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px 8px; }
+  .xchip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
+    color: #1f6f63; background: #e4f2ef; border: none; border-radius: 999px;
+    padding: 5px 6px 5px 11px; cursor: pointer; font-family: inherit;
+  }
+  .xchip:hover { background: #d3ebe6; }
+  .xchip.active { background: #1f7a6e; color: #fff; }
+  .xchip.active:hover { background: #1a6d61; }
+  .xchip .del {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 50%; background: rgba(0,0,0,.08); font-size: 10px;
+  }
+  .xchip.active .del { background: rgba(255,255,255,.25); }
+  .xbody {
+    flex: 1; overflow-y: auto; padding: 8px 16px 18px;
+    font-size: 13px; line-height: 1.7; color: #2b3540;
+  }
+  .xbody h4 {
+    font-size: 14px; margin: 16px 0 6px; color: #1f6f63;
+    border-bottom: 1px solid #e2ece9; padding-bottom: 3px;
+  }
+  .xbody h4:first-child { margin-top: 2px; }
+  .xbody ul { margin: 4px 0; padding-left: 20px; }
+  .xbody li { margin: 3px 0; }
+  .xbody p { margin: 6px 0; }
+  .xbody a { color: #1f7a6e; word-break: break-all; }
+  .xbody strong { color: #234; }
+  .xmeta { font-size: 11px; color: #8a97a3; margin: 2px 0 8px; }
+  .xempty { color: #7a8794; font-size: 12.5px; line-height: 1.95; padding: 10px 0; }
+  .xspin { display: flex; align-items: center; gap: 10px; color: #1f7a6e; font-size: 13px; padding: 16px 0; }
+  .xspin i {
+    width: 16px; height: 16px; border: 2.5px solid #cfe6e1; border-top-color: #1f7a6e;
+    border-radius: 50%; display: inline-block; animation: xspin .8s linear infinite;
+  }
+  @keyframes xspin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -381,6 +432,20 @@
       <textarea id="s-input" rows="1" placeholder="今日やるべきこと・予定・準備について聞く…" maxlength="2000"></textarea>
       <button type="submit" id="s-send">送信</button>
     </form>
+  </div>
+
+  <div class="panel xpanel" id="xpanel">
+    <div class="panel-head">
+      <button class="close" onclick="closeXPanel()">✕</button>
+      <div class="pj">探検家</div>
+      <div class="pth" id="x-sub">トピックのニュース・論文を調査</div>
+    </div>
+    <form class="xform" id="x-form" onsubmit="return researchSubmit(event)">
+      <input id="x-input" type="text" placeholder="調べたいトピック(例: LLMエージェント)" maxlength="80" autocomplete="off">
+      <button type="submit" id="x-send">🔍 調査</button>
+    </form>
+    <div class="xchips" id="x-chips"></div>
+    <div class="xbody" id="x-body"></div>
   </div>
 </div>
 
@@ -723,6 +788,68 @@ function secretaryStation() {
   return g;
 }
 
+/* 探検家(クリックでトピック調査)。unread=true で未読バッジ */
+function explorerStation(unread) {
+  const g = el('g', { class: 'node-g' });
+  // 床タイル(ティールで区別)
+  g.appendChild(el('path', { d: tilePath(70, 35), fill: '#e6f1ee', stroke: '#fff', 'stroke-width': 2.5 }));
+  g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#7bc4b6', 'stroke-width': 2.5, class: 'pulse-ring' }));
+
+  // 小さなテント(装飾)
+  const tent = el('g', { transform: 'translate(-30,-4)' });
+  tent.appendChild(el('path', { d: 'M0,-2 L-24,-2 L-12,-42 Z', fill: '#c96a3c', stroke: '#9c4d28', 'stroke-width': 2 }));
+  tent.appendChild(el('path', { d: 'M0,-2 L-12,-42 L-4,-42 L10,-2 Z', fill: '#e0894f', stroke: '#9c4d28', 'stroke-width': 2 }));
+  tent.appendChild(el('path', { d: 'M-12,-2 L-15,-22 L-8,-22 Z', fill: '#7a3f22' })); // 入口
+  // ポールの旗(そよぐ)
+  const flag = el('g', { class: 'sway', transform: 'translate(-4,-42)' });
+  flag.appendChild(el('path', { d: 'M0,0 l0,-14', stroke: '#7a3f22', 'stroke-width': 1.6 }));
+  flag.appendChild(el('path', { d: 'M0,-14 l11,3 l-11,4 Z', fill: '#2f8f7e' }));
+  tent.appendChild(flag);
+  g.appendChild(tent);
+
+  // 探検家(立ち・探検帽)。帽子を頭に重ねるため person はアニメ無しで固定
+  const XT = 'translate(16,-2) scale(1.08)';
+  const ex = person({ pose: 'stand', suit: '#7d6a3a', shirt: '#e9e0c6', skin: '#eabf94', hair: '#3a2c1e' });
+  ex.setAttribute('transform', XT);
+  g.appendChild(ex);
+  const hat = el('g', { transform: XT });
+  hat.appendChild(el('ellipse', { cx: 0, cy: -49.5, rx: 11, ry: 3.4, fill: '#6b5a2f' }));       // つば
+  hat.appendChild(el('path', { d: 'M-6.6,-49.5 Q0,-61 6.6,-49.5 Z', fill: '#7d6a3a', stroke: '#5f5027', 'stroke-width': 1 })); // ドーム
+  hat.appendChild(el('rect', { x: -6.6, y: -52, width: 13.2, height: 2.6, rx: 1.2, fill: '#5f5027' }));  // バンド
+  g.appendChild(hat);
+  // 双眼鏡を持つ手元(装飾)
+  g.appendChild(el('rect', { x: 20, y: -34, width: 7, height: 4, rx: 1.5, fill: '#2f3a44', transform: 'rotate(-8 23 -32)' }));
+
+  // 吹き出し(クリック可能の合図)
+  const bub = el('g', { class: 'bob', transform: 'translate(30,-84)' });
+  bub.appendChild(el('rect', { x: -17, y: -16, width: 34, height: 27, rx: 10, fill: '#fff', stroke: '#7bc4b6', 'stroke-width': 2, filter: 'url(#soft)' }));
+  bub.appendChild(el('path', { d: 'M-7,9 l7,9 l7,-9 Z', fill: '#fff' }));
+  const bt = el('text', { x: 0, y: 3, 'text-anchor': 'middle', 'font-size': 15 });
+  txt(bt, '🧭'); bub.appendChild(bt);
+  g.appendChild(bub);
+
+  // 未読バッジ(週次の新着レポートあり)
+  if (unread) {
+    const bd = el('g', { transform: 'translate(46,-90)' });
+    bd.appendChild(el('circle', { cx: 0, cy: 0, r: 9, fill: '#e5484d', stroke: '#fff', 'stroke-width': 2, class: 'blink' }));
+    const bx = el('text', { x: 0, y: 4, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12, 'font-weight': 800 });
+    txt(bx, '!'); bd.appendChild(bx);
+    g.appendChild(bd);
+  }
+
+  // ネームプレート
+  const plate = el('g', { transform: 'translate(0,50)' });
+  plate.appendChild(el('rect', { x: -58, y: -14, width: 116, height: 31, rx: 9, fill: '#1f6f63', filter: 'url(#soft)' }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, '探検家');
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#bfe4dd', 'font-size': 9.5 });
+  txt(t2, 'クリックで調査 🧭');
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
 /* ══════════ フロア(プレート) ══════════ */
 function buildDefs() {
   const defs = el('defs');
@@ -887,6 +1014,15 @@ function render() {
     items.push({ y: pt.y + 1e4, el: g });
   }
 
+  // 探検家(常に最前面・クリックでトピック調査)
+  {
+    const pt = iso(.90, .13);
+    const g = explorerStation(xUnread);
+    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    g.addEventListener('pointerdown', openXPanel);
+    items.push({ y: pt.y + 1e4, el: g });
+  }
+
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
 
@@ -933,7 +1069,7 @@ function openPanel(id) {
   selectedId = id;
   const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
   if (!p) return;
-  closeSPanel();
+  closeSPanel(); closeXPanel();
   fillPanel(p);
   $('panel').classList.add('open');
 }
@@ -1049,8 +1185,188 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
+
+/* ══════════ 探検家(トピック調査)══════════ */
+let XSTATUS = null;   // {configured, mode, model, topics, reports, running}
+let xUnread = false;  // 週次の新着レポート未読フラグ(キャラの ! バッジ)
+let xBusy = false;    // 調査中
+let xCurrent = null;  // 表示中トピック
+
+function forceRerender() { lastRenderKey = null; if (DATA) render(); }
+
+function computeUnread() {
+  if (!XSTATUS || !XSTATUS.reports) return false;
+  let newest = 0;
+  for (const r of Object.values(XSTATUS.reports)) newest = Math.max(newest, r.at || 0);
+  if (!newest) return false;
+  return newest > Number(localStorage.getItem('xSeenAt') || 0);
+}
+
+async function loadXStatus() {
+  try { XSTATUS = await (await fetch('/api/explorer/status')).json(); }
+  catch { XSTATUS = null; }
+}
+
+function openXPanel() {
+  closePanel(); closeGPanel(); closeSPanel();
+  $('xpanel').classList.add('open');
+  localStorage.setItem('xSeenAt', String(Date.now())); // 開いたら既読
+  if (xUnread) { xUnread = false; forceRerender(); }
+  loadXStatus().then(() => {
+    renderXTop();
+    const topics = (XSTATUS && XSTATUS.topics) || [];
+    if (xCurrent && topics.includes(xCurrent)) showReport(xCurrent);
+    else if (topics.length) showReport(topics[0]);
+    else renderXBody();
+  });
+  setTimeout(() => { const i = $('x-input'); if (i) i.focus(); }, 320);
+}
+function closeXPanel() { $('xpanel').classList.remove('open'); }
+
+function renderXTop() {
+  const mode = XSTATUS && XSTATUS.mode;
+  let label;
+  if (mode === 'cli') label = 'Claude(サブスク)で調査';
+  else if (mode === 'api') label = 'Anthropic API で調査';
+  else label = '未設定 — CLI か API キーが必要';
+  $('x-sub').textContent = label + ' ・ 毎週月曜9時に自動更新';
+  renderXChips();
+}
+
+function renderXChips() {
+  const topics = (XSTATUS && XSTATUS.topics) || [];
+  $('x-chips').innerHTML = topics.map((t, i) =>
+    `<span class="xchip${t === xCurrent ? ' active' : ''}" onclick="showReportIdx(${i})">`
+    + esc(t)
+    + `<span class="del" title="削除" onclick="deleteTopicIdx(event,${i})">✕</span></span>`
+  ).join('');
+}
+function showReportIdx(i) { const t = ((XSTATUS && XSTATUS.topics) || [])[i]; if (t) showReport(t); }
+function deleteTopicIdx(ev, i) {
+  ev.stopPropagation();
+  const t = ((XSTATUS && XSTATUS.topics) || [])[i];
+  if (t) deleteTopic(t);
+}
+
+function renderXBody() {
+  $('x-body').innerHTML = '<div class="xempty">'
+    + '調べたいトピックを入力して「🔍 調査」を押すと、探検家がニュースと論文を調べて'
+    + '<b>🔥 hot なトピック</b> / <b>📄 注目の論文</b> / <b>🌊 分野の潮流</b> にまとめます。<br><br>'
+    + '調べたトピックは保存され、毎週月曜の朝に自動で最新化されます。</div>';
+}
+
+async function showReport(topic) {
+  xCurrent = topic;
+  renderXChips();
+  const body = $('x-body');
+  body.innerHTML = '<div class="xspin"><i></i>レポートを読み込み中…</div>';
+  try {
+    const j = await (await fetch('/api/explorer/report?topic=' + encodeURIComponent(topic))).json();
+    if (j && j.report) {
+      body.innerHTML = `<div class="xmeta">${esc(topic)} ・ ${provLabel(j.provider)} ・ ${fmtAt(j.at)}</div>` + mdToHtml(j.report);
+    } else {
+      body.innerHTML = `<div class="xempty">「${esc(topic)}」のレポートはまだありません。上の「🔍 調査」で今すぐ調べられます。</div>`;
+    }
+  } catch (e) {
+    body.innerHTML = `<div class="xempty">読み込みに失敗しました: ${esc(e.message)}</div>`;
+  }
+}
+
+function researchSubmit(ev) {
+  ev.preventDefault();
+  const inp = $('x-input');
+  const t = inp.value.trim();
+  if (!t || xBusy) return false;
+  inp.value = '';
+  runResearch(t);
+  return false;
+}
+
+async function runResearch(topic) {
+  if (xBusy) return;
+  xBusy = true; xCurrent = topic;
+  $('x-send').disabled = true;
+  renderXChips();
+  const body = $('x-body');
+  body.innerHTML = `<div class="xspin"><i></i>「${esc(topic)}」を調査中…(30秒〜数分かかります)</div>`;
+  try {
+    const r = await fetch('/api/explorer/research', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    await loadXStatus();
+    renderXChips();
+    body.innerHTML = `<div class="xmeta">${esc(j.topic)} ・ ${provLabel(j.provider)} ・ ${fmtAt(j.at)}</div>` + mdToHtml(j.report);
+    localStorage.setItem('xSeenAt', String(Date.now()));
+  } catch (e) {
+    body.innerHTML = `<div class="xempty">調査に失敗しました: ${esc(e.message)}</div>`;
+  } finally {
+    xBusy = false; $('x-send').disabled = false;
+  }
+}
+
+async function deleteTopic(topic) {
+  const topics = ((XSTATUS && XSTATUS.topics) || []).filter((t) => t !== topic);
+  try {
+    await fetch('/api/explorer/topics', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topics }),
+    });
+  } catch { /* ignore */ }
+  if (xCurrent === topic) xCurrent = null;
+  await loadXStatus();
+  renderXChips();
+  const rest = (XSTATUS && XSTATUS.topics) || [];
+  if (xCurrent) showReport(xCurrent);
+  else if (rest.length) showReport(rest[0]);
+  else renderXBody();
+}
+
+function provLabel(p) { return p === 'api' ? 'API' : p === 'claude-cli' ? 'CLI(サブスク)' : '調査'; }
+function fmtAt(at) {
+  if (!at) return '';
+  const d = new Date(at);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// 簡易 Markdown → 安全な HTML(先に全体をエスケープしてから既知タグのみ復元)
+function mdInline(s) {
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (m, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+  return s;
+}
+function mdToHtml(md) {
+  const lines = esc(md).split('\n');
+  let html = '', inList = false;
+  const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    let m;
+    if ((m = line.match(/^#{1,6}\s+(.*)$/))) { closeList(); html += `<h4>${mdInline(m[1])}</h4>`; }
+    else if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${mdInline(m[1])}</li>`; }
+    else if (line.trim() === '') { closeList(); }
+    else { closeList(); html += `<p>${mdInline(line)}</p>`; }
+  }
+  closeList();
+  return html;
+}
+
+// IME 変換確定の Enter で誤送信しない
+(function () {
+  const inp = $('x-input');
+  if (!inp) return;
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.preventDefault();
+  });
+})();
+
+// 起動時に一度だけ状態を取得し、未読バッジを反映
+loadXStatus().then(() => { xUnread = computeUnread(); if (xUnread) forceRerender(); });
 
 /* ══════════ 時間帯で変わる外の空 ══════════ */
 // 空色のキーフレーム [時刻, [上, 中, 地平線]]。間を補間して滑らかに遷移。
@@ -1319,7 +1635,7 @@ function renderGoogle() {
   $('g-body').innerHTML = html;
 }
 
-function openGPanel() { closeSPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
+function openGPanel() { closeSPanel(); closeXPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
 function closeGPanel() { $('gpanel').classList.remove('open'); }
 
 async function toggleTask(listId, taskId, completed) {
@@ -1373,7 +1689,7 @@ async function loadSStatus() {
 }
 
 function openSPanel() {
-  closePanel(); closeGPanel();
+  closePanel(); closeGPanel(); closeXPanel();
   $('spanel').classList.add('open');
   renderSChat();
   if (!sGreeted) {
