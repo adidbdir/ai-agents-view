@@ -1323,6 +1323,32 @@ async function saveTopicsList(topics) {
   });
 }
 
+const xSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 1トピックを調査。サーバーが別の調査(週次など)で混雑中なら待って再試行する。
+async function researchOne(topic) {
+  const BUSY_RETRIES = 20; // 混雑時は最大 ~3分待って再試行
+  for (let attempt = 0; ; attempt++) {
+    let j, ok, status;
+    try {
+      const r = await fetch('/api/explorer/research', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic }),
+      });
+      ok = r.ok; status = r.status; j = await r.json();
+    } catch (e) {
+      if (attempt < 2) { await xSleep(5000); continue; } // 一時的な通信エラーは再試行
+      return { ok: false, error: e.message };
+    }
+    if (j && j.running) { // 別の調査が実行中 → 待って再試行(週次との競合対策)
+      if (attempt < BUSY_RETRIES) { await xSleep(9000); continue; }
+      return { ok: false, error: '混雑のため開始できませんでした' };
+    }
+    if (!ok || (j && j.error)) return { ok: false, error: (j && j.error) || ('HTTP ' + status) };
+    return { ok: true };
+  }
+}
+
 // 複数トピックをまとめて追加し、未取得のものを順番に調査する
 async function runResearchBatch(topics) {
   if (xBusy) return;
@@ -1341,6 +1367,7 @@ async function runResearchBatch(topics) {
     const reports = (XSTATUS && XSTATUS.reports) || {};
     const todo = topics.filter((t) => saved.includes(t) && !reports[t]);
     const body = $('x-body');
+    let lastError = '';
     for (let i = 0; i < todo.length; i++) {
       const t = todo[i];
       xCurrent = t;
@@ -1348,23 +1375,20 @@ async function runResearchBatch(topics) {
       renderXChips();
       const prog = todo.length > 1 ? `(${i + 1}/${todo.length}) ` : '';
       body.innerHTML = `<div class="xspin"><i></i>${prog}「${esc(t)}」を調査中…(各30秒〜数分かかります)</div>`;
-      try {
-        const r = await fetch('/api/explorer/research', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ topic: t }),
-        });
-        const j = await r.json();
-        if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
-      } catch (e) {
-        body.innerHTML = `<div class="xempty">「${esc(t)}」の調査に失敗しました: ${esc(e.message)}</div>`;
-      }
+      const res = await researchOne(t);
+      if (!res.ok) lastError = `「${t}」: ${res.error}`;
       await loadXStatus();
+      renderXChips(); // 完了したチップを随時反映
     }
     xProgress = null;
     renderXChips();
     localStorage.setItem('xSeenAt', String(Date.now()));
-    const show = todo[0] || saved[0];
-    if (show) showReport(show); else renderXBody();
+    // 調査できたものの先頭を表示。全滅ならエラー、なければ空案内。
+    const reportsNow = (XSTATUS && XSTATUS.reports) || {};
+    const firstDone = todo.find((t) => reportsNow[t]) || saved.find((t) => reportsNow[t]);
+    if (firstDone) showReport(firstDone);
+    else if (lastError) body.innerHTML = `<div class="xempty">調査に失敗しました(${esc(lastError)})</div>`;
+    else renderXBody();
   } finally {
     xProgress = null;
     xBusy = false; $('x-send').disabled = false;

@@ -43,9 +43,15 @@ function loadPeers() {
   return peers;
 }
 
+// ピア取得のタイムアウト(Tailscale 等の遅延に耐えるよう長めに)と
+// 失敗時に直近の成功データを使うための猶予時間。
+const PEER_TIMEOUT_MS = process.env.PEER_TIMEOUT_MS ? Number(process.env.PEER_TIMEOUT_MS) : 8000;
+const PEER_STALE_MS = process.env.PEER_STALE_MS ? Number(process.env.PEER_STALE_MS) : 90000;
+const peerCache = new Map(); // url -> { at, data }
+
 function fetchPeer(peer) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 2500);
+  const t = setTimeout(() => ctrl.abort(), PEER_TIMEOUT_MS);
   return fetch(peer.url.replace(/\/$/, '') + '/api/data?local=1', { signal: ctrl.signal })
     .then((r) => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -269,10 +275,20 @@ async function collectAll() {
 
   const results = await Promise.allSettled(peers.map(fetchPeer));
   data.peers = [];
+  const now = Date.now();
   results.forEach((r, i) => {
     const peer = peers[i];
+    let d = null, stale = false;
     if (r.status === 'fulfilled') {
-      const d = r.value || {};
+      d = r.value || {};
+      peerCache.set(peer.url, { at: now, data: d });
+    } else {
+      // 一時的な失敗(Tailscale の遅延等)では直近の成功データを使い、
+      // デスクの点滅と「接続不可」の明滅を防ぐ。猶予を超えたら切断扱い。
+      const cached = peerCache.get(peer.url);
+      if (cached && now - cached.at < PEER_STALE_MS) { d = cached.data; stale = true; }
+    }
+    if (d) {
       const host = peer.label || d.host || new URL(peer.url).hostname;
       for (const p of d.projects || []) {
         p.host = host;
@@ -280,7 +296,7 @@ async function collectAll() {
         p.id = `${host}:${p.dirName}`;
         data.projects.push(p);
       }
-      data.peers.push({ url: peer.url, host, ok: true, projects: (d.projects || []).length });
+      data.peers.push({ url: peer.url, host, ok: true, stale, projects: (d.projects || []).length });
     } else {
       data.peers.push({ url: peer.url, host: peer.label, ok: false, error: String(r.reason).slice(0, 120) });
     }
@@ -423,19 +439,19 @@ function loadExplorerConfig() {
 }
 
 function researchPrompt(topic) {
-  return `あなたは「${topic}」分野を追う調査担当です。Web 検索を使って直近1週間ほどの最新情報を調べ、日本語の Markdown レポートにまとめてください。
+  return `あなたは「${topic}」分野を追う調査担当です。Web 検索を複数回おこない、直近1〜2週間の最新情報を十分に調べたうえで、日本語の Markdown レポートにまとめてください。
 
-必ず次の3セクションを見出し(## )で構成してください:
+必ず次の3セクションを見出し(## )で構成し、各セクションを充実させてください:
 ## 🔥 hot なトピック
-いま盛り上がっている話題・ニュースを3〜5個、各1〜2行で。
+いま盛り上がっている話題・ニュースを最低4件、各1〜2行で。
 ## 📄 注目の論文
-arXiv などの新着・話題の論文を3〜5本、「タイトル — 要点(著者/所属)」の形で。可能なら [タイトル](URL) のリンクを付ける。
+arXiv などの新着・話題の論文を最低4本、「タイトル — 要点(著者/所属)」の形で。可能な限り [タイトル](URL) のリンクを付ける。
 ## 🌊 分野の潮流
-この分野で進んでいる大きな流れ・トレンドを2〜4個、簡潔に。
+この分野で進んでいる大きな流れ・トレンドを最低3件、簡潔に。
 
-- 事実に基づき、憶測は避ける。分からない点は無理に埋めない。
-- 各項目に可能な限り出典リンク([表示テキスト](URL))を付ける。
-- 全体で簡潔に。前置きや結びの挨拶は不要。`;
+- 各セクションで指定した件数を必ず満たすこと。情報が足りなければ追加で Web 検索する。
+- 事実に基づき、憶測は避ける。各項目に可能な限り出典リンク([表示テキスト](URL))を付ける。
+- 前置きや結びの挨拶は不要。`;
 }
 
 /** CLI で Web 検索を許可して調査(タイムアウト180秒) */
@@ -527,6 +543,13 @@ async function checkWeekly() {
   const backToMon = (boundary.getDay() + 6) % 7; // 月曜(1)までの日数
   boundary.setDate(boundary.getDate() - backToMon);
   const boundaryMs = boundary.getTime();
+  // 初回(未実行)は即時の一斉調査や手動調査との競合を避けるため、
+  // 過去分を遡って実行せず基準時刻だけ記録して次の月曜を待つ。
+  if (!st.lastWeeklyRun) {
+    st.lastWeeklyRun = now.getTime();
+    saveExplorerState(st);
+    return;
+  }
   if (!(st.lastWeeklyRun < boundaryMs && boundaryMs <= now.getTime())) return;
 
   explorerRunning = true;
