@@ -47,7 +47,10 @@ function loadPeers() {
 // 失敗時に直近の成功データを使うための猶予時間。
 const PEER_TIMEOUT_MS = process.env.PEER_TIMEOUT_MS ? Number(process.env.PEER_TIMEOUT_MS) : 8000;
 const PEER_STALE_MS = process.env.PEER_STALE_MS ? Number(process.env.PEER_STALE_MS) : 90000;
-const peerCache = new Map(); // url -> { at, data }
+// ピアの取得結果キャッシュ: url -> { at(最終成功ms), data, ok(最終試行の成否), lastTry, error }
+// 取得はバックグラウンドで定期実行し、/api/data はこのキャッシュを即座に返す。
+const peerCache = new Map();
+let peerRefreshing = false;
 
 function fetchPeer(peer) {
   const ctrl = new AbortController();
@@ -268,40 +271,56 @@ function collect() {
 }
 
 /** ローカル + ピアの集計をマージして返す */
-async function collectAll() {
+// ピアをバックグラウンドで取得し peerCache を更新する。遅いピアがいても
+// /api/data の応答は待たされない(応答は下の collectAll がキャッシュを即返す)。
+async function refreshPeers() {
+  if (peerRefreshing) return;
+  peerRefreshing = true;
+  try {
+    const peers = loadPeers();
+    await Promise.allSettled(peers.map(async (peer) => {
+      const now = Date.now();
+      try {
+        const d = (await fetchPeer(peer)) || {};
+        peerCache.set(peer.url, { at: now, data: d, ok: true, lastTry: now });
+      } catch (e) {
+        const prev = peerCache.get(peer.url) || {};
+        peerCache.set(peer.url, { ...prev, ok: false, lastTry: now, error: String(e && e.message || e).slice(0, 120) });
+      }
+    }));
+  } finally {
+    peerRefreshing = false;
+  }
+}
+
+// ローカル集計に、キャッシュ済みのピアデータをマージして即座に返す(await しない)。
+function collectAll() {
   const data = collect();
   const peers = loadPeers();
   if (peers.length === 0) return data;
 
-  const results = await Promise.allSettled(peers.map(fetchPeer));
   data.peers = [];
   const now = Date.now();
-  results.forEach((r, i) => {
-    const peer = peers[i];
-    let d = null, stale = false;
-    if (r.status === 'fulfilled') {
-      d = r.value || {};
-      peerCache.set(peer.url, { at: now, data: d });
-    } else {
-      // 一時的な失敗(Tailscale の遅延等)では直近の成功データを使い、
-      // デスクの点滅と「接続不可」の明滅を防ぐ。猶予を超えたら切断扱い。
-      const cached = peerCache.get(peer.url);
-      if (cached && now - cached.at < PEER_STALE_MS) { d = cached.data; stale = true; }
-    }
-    if (d) {
-      const host = peer.label || d.host || new URL(peer.url).hostname;
-      for (const p of d.projects || []) {
+  for (const peer of peers) {
+    const c = peerCache.get(peer.url);
+    // 直近の成功データが猶予内なら利用。最後の取得が失敗なら stale 表示。
+    if (c && c.data && now - c.at < PEER_STALE_MS) {
+      const stale = !c.ok;
+      const host = peer.label || c.data.host || new URL(peer.url).hostname;
+      for (const p of c.data.projects || []) {
         p.host = host;
         p.remote = true;
         p.id = `${host}:${p.dirName}`;
         data.projects.push(p);
       }
-      data.peers.push({ url: peer.url, host, ok: true, stale, projects: (d.projects || []).length });
+      data.peers.push({ url: peer.url, host, ok: true, stale, projects: (c.data.projects || []).length });
     } else {
-      data.peers.push({ url: peer.url, host: peer.label, ok: false, error: String(r.reason).slice(0, 120) });
+      data.peers.push({ url: peer.url, host: peer.label, ok: false, error: (c && c.error) || 'offline' });
     }
-  });
+  }
   data.projects.sort((a, b) => (b.lastTs || '').localeCompare(a.lastTs || ''));
+  // 取得を待たずにバックグラウンド更新をキック
+  refreshPeers();
   return data;
 }
 
@@ -1171,6 +1190,10 @@ server.listen(PORT, () => {
   console.log(`AI Agents View: http://localhost:${PORT}`);
   console.log(`watching: ${PROJECTS_DIR}`);
 });
+
+// ピアを起動時に温め、以降も定期更新する(/api/data はキャッシュを即返す)。
+refreshPeers();
+setInterval(refreshPeers, 5000);
 
 // 探検家の週次調査(月曜9時)。サーバー起動中のみ動作する。
 const runWeekly = () => checkWeekly().catch((e) => console.error('[explorer] 週次エラー:', e.message));
