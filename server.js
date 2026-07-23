@@ -70,6 +70,16 @@ function safeJson(line) {
   try { return JSON.parse(line); } catch { return null; }
 }
 
+/** user メッセージが「実際の依頼(テキスト発話)」か。tool_result / 画像のみ / 空 は false */
+function isUserPrompt(message) {
+  if (!message || message.role !== 'user') return false;
+  const c = message.content;
+  if (typeof c === 'string') return c.trim().length > 0;
+  if (!Array.isArray(c)) return false;
+  if (c.some((b) => b && b.type === 'tool_result')) return false;
+  return c.some((b) => b && b.type === 'text' && String(b.text || '').trim().length > 0);
+}
+
 /** 1 セッション (.jsonl) を集計する */
 function parseSession(filePath, stat) {
   const key = `${stat.mtimeMs}:${stat.size}`;
@@ -85,6 +95,7 @@ function parseSession(filePath, stat) {
     firstTs: null,
     lastTs: null,
     userMessages: 0,
+    promptCount: 0,      // ユーザーが実際に打った依頼(tool_result/画像のみのターンは除く)
     assistantMessages: 0,
     toolCalls: {},        // name -> count
     totalToolCalls: 0,
@@ -120,6 +131,7 @@ function parseSession(filePath, stat) {
 
     if (o.type === 'user' && o.message) {
       summary.userMessages++;
+      if (!o.isSidechain && isUserPrompt(o.message)) summary.promptCount++;
       if (!summary.firstPrompt && typeof o.message.content === 'string') {
         summary.firstPrompt = o.message.content.slice(0, 120);
       }
@@ -673,23 +685,63 @@ async function fetchCalendarEvents(timeMin, timeMax, maxResults = 100) {
   return (res.items || []).filter((e) => e.status !== 'cancelled').map(mapEvent);
 }
 
-/** 全 ToDo リストのタスク(未完了すべて + 今日完了分)を取得する */
-async function fetchTaskLists() {
+/** 1 リストのタスクを nextPageToken を辿って全件取得する */
+async function fetchTasksPaged(listId, params) {
+  const out = [];
+  let pageToken = null, guard = 0;
+  do {
+    const p = new URLSearchParams(params);
+    if (pageToken) p.set('pageToken', pageToken);
+    const r = await gApi(
+      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks?` + p);
+    out.push(...(r.items || []));
+    pageToken = r.nextPageToken;
+  } while (pageToken && ++guard < 20);
+  return out;
+}
+
+/**
+ * 全 ToDo リストのタスクを取得する。
+ * 既定(opts なし)は「未完了すべて + 今日完了分」(オフィス表示/当日ブリーフィング用)。
+ * opts.completedSinceMs を渡すと「未完了すべて + その時刻以降に完了したタスク」を集める。
+ * 完了タスクは位置順 100 件上限に埋もれる恐れがあるため、completedMin + ページングで確実に取得する。
+ */
+async function fetchTaskLists(opts = {}) {
+  const sinceMs = opts.completedSinceMs || null;
   const listRes = await gApi('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=20');
   const today = localDateStr();
   return Promise.all((listRes.items || []).map(async (l) => {
-    const tr = await gApi(
-      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(l.id)}/tasks?` +
-      new URLSearchParams({ showCompleted: 'true', showHidden: 'true', maxResults: '100' }));
-    const tasks = (tr.items || [])
+    let raw;
+    if (sinceMs) {
+      // 未完了(全件) と 期間内の完了タスク を別々に確実に取得してマージ
+      const [inc, comp] = await Promise.all([
+        fetchTasksPaged(l.id, { showCompleted: 'false', maxResults: '100' }),
+        fetchTasksPaged(l.id, { showCompleted: 'true', showHidden: 'true', maxResults: '100',
+          completedMin: new Date(sinceMs).toISOString() }),
+      ]);
+      const seen = new Set();
+      raw = [];
+      for (const t of [...inc, ...comp]) { if (t.id && !seen.has(t.id)) { seen.add(t.id); raw.push(t); } }
+    } else {
+      const tr = await gApi(
+        `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(l.id)}/tasks?` +
+        new URLSearchParams({ showCompleted: 'true', showHidden: 'true', maxResults: '100' }));
+      raw = tr.items || [];
+    }
+    const tasks = raw
       .filter((t) => t.title)
-      .filter((t) => t.status !== 'completed' || (t.completed || '').slice(0, 10) === today)
+      .filter((t) => {
+        if (t.status !== 'completed') return true;
+        if (sinceMs) return !!t.completed && Date.parse(t.completed) >= sinceMs;
+        return (t.completed || '').slice(0, 10) === today;
+      })
       .map((t) => ({
         id: t.id,
         title: t.title,
         notes: t.notes || null,
         due: t.due ? t.due.slice(0, 10) : null,
         completed: t.status === 'completed',
+        completedAt: t.completed || null,
       }));
     tasks.sort((a, b) => (a.completed === b.completed ? 0 : a.completed ? 1 : -1)
       || (a.due || '9999').localeCompare(b.due || '9999'));
@@ -718,6 +770,56 @@ async function fetchAgenda() {
  * 期間は SECRETARY_CAL_PAST_DAYS / SECRETARY_CAL_FUTURE_DAYS で調整可(既定 過去7日〜先14日)。 */
 const SEC_PAST_DAYS = Math.max(0, Number(process.env.SECRETARY_CAL_PAST_DAYS || 7));
 const SEC_FUTURE_DAYS = Math.max(1, Number(process.env.SECRETARY_CAL_FUTURE_DAYS || 14));
+// 週報作成の材料として、過去に完了した ToDo タスクを何日分渡すか(既定 14 日)
+const SEC_DONE_DAYS = Math.max(1, Number(process.env.SECRETARY_TASK_DONE_DAYS || 14));
+// 週報・月次振り返りの材料として、Claude Code のセッション作業ログを何日分渡すか(既定 30 日)
+const SEC_SESSION_DAYS = Math.max(1, Number(process.env.SECRETARY_SESSION_DAYS || 30));
+// 文脈肥大を防ぐためのセッション表示上限(新しい順にこの件数まで。超過分は件数のみ通知)
+const SEC_SESSION_MAX = Math.max(10, Number(process.env.SECRETARY_SESSION_MAX || 200));
+// セッション作業ログを秘書に渡すか(既定 ON。SECRETARY_INCLUDE_SESSIONS=0 で無効)
+const SEC_INCLUDE_SESSIONS = process.env.SECRETARY_INCLUDE_SESSIONS !== '0';
+
+/**
+ * 過去 days 日分の Claude Code セッションを走査し、週報の材料になる作業ログを返す。
+ * 各セッションの ai-title・プロジェクト(cwd)・実依頼数・稼働時間帯を抽出する。
+ * 巨大 jsonl を毎回開かないよう mtime で期間外ファイルを足切りし、parseSession のキャッシュを再利用する。
+ * 一時セッション(-private* ディレクトリ)は対象外。
+ */
+function buildSessionDigest(days) {
+  const now = Date.now();
+  const cutoff = now - days * 86400e3;
+  let dirs;
+  try {
+    dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch { return []; }
+
+  const out = [];
+  for (const d of dirs) {
+    if (d.name.startsWith('-private')) continue; // 一時 / SDK セッションは除外
+    const projDir = path.join(PROJECTS_DIR, d.name);
+    let files;
+    try { files = fs.readdirSync(projDir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const fp = path.join(projDir, f);
+      let stat;
+      try { stat = fs.statSync(fp); } catch { continue; }
+      if (stat.mtimeMs < cutoff) continue; // 期間外は開かない(足切り)
+      const s = parseSession(fp, stat);
+      const lastMs = s.lastTs ? Date.parse(s.lastTs) : stat.mtimeMs;
+      if (!lastMs || lastMs < cutoff) continue;
+      if (!s.title && !s.promptCount) continue; // 空セッションは除外
+      out.push({
+        project: s.cwd ? path.basename(s.cwd) : d.name.replace(/^-/, '').split('-').pop(),
+        title: s.title || '(無題セッション)',
+        prompts: s.promptCount || 0,
+        firstMs: s.firstTs ? Date.parse(s.firstTs) : lastMs,
+        lastMs,
+      });
+    }
+  }
+  out.sort((a, b) => b.lastMs - a.lastMs); // 新しい順(上限で古い分を落とすため)
+  return out;
+}
 
 const DOW_JA = '日月火水木金土';
 function dowJa(dateStr) { return DOW_JA[new Date(dateStr + 'T00:00:00').getDay()]; }
@@ -739,11 +841,17 @@ async function fetchSecretaryData() {
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
   const timeMin = new Date(todayStart.getTime() - SEC_PAST_DAYS * 86400e3);
   const timeMax = new Date(todayStart.getTime() + (SEC_FUTURE_DAYS + 1) * 86400e3);
+  const completedSinceMs = todayStart.getTime() - SEC_DONE_DAYS * 86400e3;
   const [events, taskLists] = await Promise.all([
     fetchCalendarEvents(timeMin, timeMax, 250),
-    fetchTaskLists(),
+    fetchTaskLists({ completedSinceMs }),
   ]);
-  const data = { date: localDateStr(now), events, taskLists };
+  let sessions = null;
+  if (SEC_INCLUDE_SESSIONS) {
+    try { sessions = buildSessionDigest(SEC_SESSION_DAYS); }
+    catch { sessions = null; }
+  }
+  const data = { date: localDateStr(now), events, taskLists, sessions };
   secDataCache = { at: Date.now(), data };
   return data;
 }
@@ -787,19 +895,76 @@ async function secretaryContext() {
     }
   }
 
-  lines.push('', '■ タスク (ToDo)');
-  let any = false;
+  // 未完了 / 完了 に分けて渡す(完了分は週報の材料)
+  const openTasks = [];
+  const doneTasks = [];
   for (const list of a.taskLists) {
-    for (const t of list.tasks) {
-      any = true;
-      const box = t.completed ? '[完了]' : '[未]';
-      let l = `  ${box} ${t.title}`;
-      if (t.due) l += `（期日 ${t.due}${!t.completed && t.due < a.date ? ' ※期限切れ' : ''}）`;
-      if (t.notes) l += ` — ${String(t.notes).slice(0, 60)}`;
-      lines.push(l);
+    for (const t of list.tasks) (t.completed ? doneTasks : openTasks).push({ ...t, list: list.title });
+  }
+
+  lines.push('', '■ 未完了タスク (ToDo)');
+  if (!openTasks.length) lines.push('  なし');
+  for (const t of openTasks) {
+    let l = `  [未] ${t.title}`;
+    if (t.due) l += `（期日 ${t.due}${t.due < a.date ? ' ※期限切れ' : ''}）`;
+    if (t.notes) l += ` — ${String(t.notes).slice(0, 200)}`;
+    lines.push(l);
+  }
+
+  lines.push('', `■ 完了した作業(過去${SEC_DONE_DAYS}日 / 週報・振り返りの材料)`);
+  if (!doneTasks.length) {
+    lines.push('  なし');
+  } else {
+    // 完了日(ローカル日付)ごとにグループ化し、新しい順に並べる
+    const byDay = new Map();
+    for (const t of doneTasks) {
+      const d = t.completedAt ? localDateStr(new Date(t.completedAt)) : '不明';
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d).push(t);
+    }
+    for (const d of [...byDay.keys()].sort().reverse()) {
+      const label = d === '不明' ? '完了日不明'
+        : `${d} (${dowJa(d)}) ${relDayLabel(d, a.date)}`;
+      lines.push(`[${label}]`);
+      for (const t of byDay.get(d)) {
+        let l = `  ✓ ${t.title}`;
+        if (t.list) l += ` 〔${t.list}〕`;
+        if (t.notes) l += ` — ${String(t.notes).slice(0, 200)}`;
+        lines.push(l);
+      }
     }
   }
-  if (!any) lines.push('  なし');
+
+  // Claude Code の作業ログ(週報の材料)。作業日ごとに新しい順で並べる
+  if (a.sessions) {
+    lines.push('', `■ Claude Code 作業ログ(過去${SEC_SESSION_DAYS}日 / 週報の材料)`);
+    if (!a.sessions.length) {
+      lines.push('  記録なし');
+    } else {
+      // 新しい順に上限まで表示。超過分は件数のみ知らせる(文脈肥大の防止)
+      const shown = a.sessions.slice(0, SEC_SESSION_MAX);
+      const omitted = a.sessions.length - shown.length;
+      const byDay = new Map();
+      for (const s of shown) {
+        const d = localDateStr(new Date(s.lastMs));
+        if (!byDay.has(d)) byDay.set(d, []);
+        byDay.get(d).push(s);
+      }
+      for (const d of [...byDay.keys()].sort().reverse()) {
+        lines.push(`[${d} (${dowJa(d)}) ${relDayLabel(d, a.date)}]`);
+        for (const s of byDay.get(d).sort((x, y) => x.lastMs - y.lastMs)) {
+          const meta = [];
+          if (s.prompts) meta.push(`依頼${s.prompts}件`);
+          // 同日で完結したセッションは時刻レンジ、日をまたぐ場合は開始日から明記(逆転表示を防ぐ)
+          meta.push(localDateStr(new Date(s.firstMs)) === d
+            ? `${hm(s.firstMs)}–${hm(s.lastMs)}`
+            : `${localDateStr(new Date(s.firstMs))} ${hm(s.firstMs)}〜${hm(s.lastMs)}`);
+          lines.push(`  ・[${s.project}] ${s.title}(${meta.join(', ')})`);
+        }
+      }
+      if (omitted > 0) lines.push(`(ほか古いセッション ${omitted} 件は省略)`);
+    }
+  }
 
   // 定型ブリーフィング(フォールバック)は「今日」に絞ったデータを使う
   const todayEvents = a.events.filter((e) => eventDateKey(e) === a.date);
@@ -812,11 +977,14 @@ function secretarySystemPrompt(ctxText) {
   return `あなたはユーザー専属の有能な日本語の秘書です。現在時刻は ${nowStr} です。
 下記「予定・タスク情報」(Google カレンダーの予定と Google ToDo のタスク) を踏まえてユーザーの相談に答えます。
 予定は今日だけでなく過去〜先の一定期間を日付ごとに渡しているので、「明日の予定」「来週の会議」「先週なにをしていたか」など他の日についても答えられます。
+タスクは「未完了タスク」と「完了した作業(過去${SEC_DONE_DAYS}日・完了日ごと)」を分けて渡しています。完了した作業は週報や振り返りの材料に使えます。
+さらに「Claude Code 作業ログ(過去${SEC_SESSION_DAYS}日)」として、日付ごとに各作業セッションのタイトル・プロジェクト・依頼件数・稼働時間帯を渡しています。これは実際に PC 上でどの案件にどれだけ取り組んだかの記録で、週報作成時に完了タスク・予定と突き合わせて使えます(タイトルはセッションの自動要約なので、内容を補足的に推測しても構いませんが、事実として断定しない)。
 
 方針:
 - 予定の要点、優先してやるべきタスク、締め切り、各予定に向けて準備すべきものを、具体的かつ実務的に助言する。
+- 「今週の作業を週報にまとめて」等を頼まれたら、「完了した作業」と「Claude Code 作業ログ」を作業日ごとに突き合わせ、関連する予定(会議・イベント)も踏まえて、実務的な週次レポートを作成する。事実に基づき、行っていない作業を創作しない。
 - 「明日」「今週」などの相対的な指定は、現在時刻を基準に正確な日付へ読み替える(渡した各予定には日付と曜日、今日/明日/N日後 などの相対ラベルが付いている)。
-- 簡潔に。要点は短い箇条書き(・)でまとめ、前置きや定型的な挨拶は最小限にする。
+- 簡潔に。要点は短い箇条書き(・)でまとめ、前置きや定型的な挨拶は最小限にする(週報などまとまった成果物を求められた場合はこの限りではない)。
 - 時刻・期日は正確に扱い、「進行中」「次の予定」「期限切れ」を意識する。
 - 渡した期間の外(遠い未来や過去)は情報がない旨を伝える。推測で断定せず「情報にありません」と述べる。Markdown の見出し(#)は使わない。
 - 常に日本語で回答する。
