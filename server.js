@@ -456,6 +456,30 @@ function saveExplorerState(s) {
   catch (e) { console.error('explorer-state 保存失敗:', e.message); }
 }
 
+/* 秘書チャット履歴のサーバー保存(PC・スマホなど端末間で共有)。約1日で失効。 */
+const SECRETARY_STATE_PATH = path.join(__dirname, 'secretary-state.json');
+const SECRETARY_TTL_MS = 24 * 60 * 60 * 1000; // 約1日
+function sanitizeSecretaryMsgs(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-40)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 4000), hidden: !!m.hidden }));
+}
+function loadSecretaryHistory() {
+  try {
+    const j = JSON.parse(fs.readFileSync(SECRETARY_STATE_PATH, 'utf8'));
+    if (!j || !Array.isArray(j.messages) || !j.at) return { messages: [], at: 0 };
+    if ((Date.now() - Number(j.at)) > SECRETARY_TTL_MS) return { messages: [], at: 0 };
+    return { messages: sanitizeSecretaryMsgs(j.messages), at: Number(j.at) };
+  } catch { return { messages: [], at: 0 }; }
+}
+function saveSecretaryHistory(messages) {
+  const clean = sanitizeSecretaryMsgs(messages);
+  try { fs.writeFileSync(SECRETARY_STATE_PATH, JSON.stringify({ at: Date.now(), messages: clean }, null, 2)); }
+  catch (e) { console.error('secretary-state 保存失敗:', e.message); }
+  return clean;
+}
+
 /** 探検家の実行設定。基本は秘書設定を流用し、EXPLORER_* があれば上書きする */
 function loadExplorerConfig() {
   const base = loadSecretaryConfig();
@@ -1248,6 +1272,21 @@ const server = http.createServer((req, res) => {
       })
       .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;
+  }
+
+  // 会話履歴の取得・保存(端末間で共有)
+  if (url.pathname === '/api/secretary/history') {
+    if (req.method === 'GET') {
+      const h = loadSecretaryHistory();
+      sendJson(res, 200, { messages: h.messages, at: h.at });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => sendJson(res, 200, { ok: true, messages: saveSecretaryHistory(body.messages) }))
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
   }
 
   /* ── 探検家(トピック調査)─────────────────── */

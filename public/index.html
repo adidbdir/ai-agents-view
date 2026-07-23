@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AI Agents View — Claude Code Sessions</title>
 <style>
   :root {
@@ -27,7 +27,7 @@
     color: var(--navy);
     overflow: hidden;
   }
-  #app { position: relative; width: 100vw; height: 100vh; }
+  #app { position: relative; width: 100vw; height: 100vh; height: 100dvh; }
 
   /* ── 時間帯で変わる外の空 ─────────────────────── */
   #sky {
@@ -398,6 +398,76 @@
     transition: background .15s ease;
   }
   .panel-resize:hover::before { background: rgba(255,255,255,.75); }
+
+  /* ══════════ スマホ対応(〜640px)══════════ */
+  @media (max-width: 640px) {
+    /* 上部: タイトルのみ、装飾ピルは隠す */
+    .title-capsule {
+      top: 8px; font-size: 15px; letter-spacing: .02em;
+      padding: 8px 22px; box-shadow: 0 4px 14px rgba(45,62,80,.24);
+    }
+    .title-capsule small { display: none; }
+    #tod-pill { display: none; }
+
+    /* 統計: 下部の横スクロール帯に */
+    .stats {
+      bottom: 104px; left: 0; right: 0; transform: none; width: 100%;
+      justify-content: flex-start; gap: 8px; flex-wrap: nowrap;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      padding: 0 12px; scrollbar-width: none;
+    }
+    .stats::-webkit-scrollbar { display: none; }
+    .stat { min-width: 70px; padding: 6px 12px; flex: none; }
+    .stat .v { font-size: 16px; }
+    .stat .k { font-size: 9px; }
+
+    /* ボタン列: 統計の下、左右に */
+    .gcal-btn {
+      top: auto; bottom: 56px; left: 12px; right: auto;
+      padding: 9px 13px; border-radius: 12px;
+    }
+    .gcal-btn .b1 { font-size: 12.5px; }
+    .gcal-btn .b2 { display: none; }
+    .page-link {
+      top: auto; bottom: 56px; right: 12px;
+      padding: 10px 13px; font-size: 12.5px; border-radius: 12px;
+    }
+
+    /* 凡例: 期間セレクタだけ残す */
+    .legend { left: 12px; bottom: 12px; padding: 8px 12px; font-size: 11px; }
+    .legend .row:not(:last-child) { display: none; }
+    .legend .row:last-child { margin: 0; }
+    .updated { display: none; }
+
+    /* ズーム: 右下で横並びに */
+    .zoom-ctrl {
+      flex-direction: row; align-items: center;
+      right: 12px; left: auto; bottom: 12px; gap: 5px;
+    }
+    .zoom-ctrl button { width: 34px; height: 34px; font-size: 18px; border-radius: 10px; }
+    .zoom-ctrl button.reset { font-size: 14px; }
+    .zoom-ctrl .zlevel { min-width: 34px; }
+
+    /* パネルは全画面、リサイズ無効 */
+    .panel, .gpanel, .spanel, .xpanel { width: 100%; max-width: 100%; }
+    .panel-resize { display: none; }
+
+    /* iOS のフォーカス時ズームを防ぐ(入力は16px以上に) */
+    .sform textarea, .xform input, .gadd input { font-size: 16px; }
+
+    /* ノッチ・ブラウザ上部バーを避ける(セーフエリア対応)*/
+    .panel-head { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
+    .panel-head .close {
+      top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px;
+      width: 40px; height: 40px; font-size: 18px;
+    }
+    .title-capsule { top: calc(8px + env(safe-area-inset-top, 0px)); }
+
+    /* 下部UIはホームインジケータ・下部バー分だけ持ち上げる */
+    .stats { bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+    .gcal-btn, .page-link { bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
+    .legend, .zoom-ctrl { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  }
 </style>
 </head>
 <body>
@@ -603,27 +673,49 @@ function resetView() { CAM.scale = 1; CAM.cx = VIEW.w / 2; CAM.cy = VIEW.h / 2; 
     zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }, { passive: false });
 
-  // 背景ドラッグでパン(ステーションの上から始めた場合はクリックに譲る)
-  let pan = null;
+  // 背景ドラッグでパン / 2本指ピンチでズーム(ステーション上はクリックに譲る)
+  const pointers = new Map();   // pointerId → {x, y}
+  let pinchDist = 0;
   svg.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     if (e.target.closest && e.target.closest('.node-g')) return;
-    pan = { x: e.clientX, y: e.clientY };
-    svg.classList.add('panning');
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { svg.setPointerCapture(e.pointerId); } catch {}
+    if (pointers.size === 1) {
+      svg.classList.add('panning');
+    } else if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    }
   });
   svg.addEventListener('pointermove', (e) => {
-    if (!pan) return;
+    if (!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) {
+      // 2本指: 指の中点を固定してピンチズーム
+      const [a, b] = [...pointers.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0 && dist > 0) {
+        zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, dist / pinchDist);
+      }
+      pinchDist = dist;
+      return;
+    }
+    // 1本指: パン
     const cur = clientToWorld(e.clientX, e.clientY);
-    const prev = clientToWorld(pan.x, pan.y);
-    CAM.cx -= cur.x - prev.x;
-    CAM.cy -= cur.y - prev.y;
-    pan.x = e.clientX; pan.y = e.clientY;
+    const was = clientToWorld(prev.x, prev.y);
+    CAM.cx -= cur.x - was.x;
+    CAM.cy -= cur.y - was.y;
     applyView();
   });
-  const endPan = () => { if (pan) { pan = null; svg.classList.remove('panning'); } };
-  svg.addEventListener('pointerup', endPan);
-  svg.addEventListener('pointercancel', endPan);
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
+    if (pointers.size === 0) svg.classList.remove('panning');
+  };
+  svg.addEventListener('pointerup', endPointer);
+  svg.addEventListener('pointercancel', endPointer);
 
   $('zoom-in').addEventListener('click', () => zoomCenter(1.25));
   $('zoom-out').addEventListener('click', () => zoomCenter(1 / 1.25));
@@ -1913,28 +2005,30 @@ gtick();
 setInterval(gtick, 60000);
 
 /* ══════════ 秘書アシスタント・チャット ══════════ */
-// 秘書チャットの履歴は localStorage に約1日分保存し、リロード後も復元する
-const SCHAT_KEY = 'schat:v1';
-const SCHAT_TTL_MS = 24 * 60 * 60 * 1000; // 約1日
-function loadStoredSChat() {
+// 秘書チャットの履歴はサーバー(secretary-state.json)に約1日分保存し、
+// PC・スマホなど複数端末で共有する。パネルを開くたびに最新を取得する。
+let SCHAT = [];          // {role, content, hidden?, error?}
+let schatLoaded = false;
+async function loadSChatFromServer() {
   try {
-    const raw = localStorage.getItem(SCHAT_KEY);
-    if (!raw) return [];
-    const o = JSON.parse(raw);
-    if (!o || !Array.isArray(o.items)) return [];
-    if (!o.at || (Date.now() - o.at) > SCHAT_TTL_MS) { localStorage.removeItem(SCHAT_KEY); return []; }
-    return o.items;
-  } catch { return []; }
-}
-function saveSChat() {
-  try {
-    // エラー吹き出しは保存しない(再送時の履歴汚染を避ける)
-    const items = SCHAT.filter((m) => !m.error);
-    localStorage.setItem(SCHAT_KEY, JSON.stringify({ at: Date.now(), items }));
+    const j = await (await fetch('/api/secretary/history')).json();
+    if (j && Array.isArray(j.messages)) SCHAT = j.messages;
   } catch {}
+  schatLoaded = true;
+}
+let sSaveTimer = null;
+function saveSChat() {
+  // エラー吹き出しは保存しない(再送時の履歴汚染を避ける)。連続保存はまとめる。
+  clearTimeout(sSaveTimer);
+  sSaveTimer = setTimeout(() => {
+    const items = SCHAT.filter((m) => !m.error).map((m) => ({ role: m.role, content: m.content, hidden: !!m.hidden }));
+    fetch('/api/secretary/history', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: items }),
+    }).catch(() => {});
+  }, 400);
 }
 
-let SCHAT = loadStoredSChat();   // {role, content, hidden?, error?}
 let sBusy = false;
 let sStatus = null;      // {configured, model, calendarLinked}
 let sGreeted = false;
@@ -1951,19 +2045,21 @@ async function loadSStatus() {
   catch { sStatus = null; }
 }
 
-function openSPanel() {
+async function openSPanel() {
   closePanel(); closeGPanel(); closeXPanel();
   $('spanel').classList.add('open');
   renderSChat();
+  // 開くたびにサーバーから最新履歴を取得(他端末での会話を反映)。
+  // 送信中の取得は進行中の会話を上書きしうるため避ける。
+  if (!sBusy) { await loadSChatFromServer(); renderSChat(); }
   if (!sGreeted) {
     sGreeted = true;
-    loadSStatus().then(() => {
-      renderSSug();
-      if (!SCHAT.length) {
-        // 初回は今日のブリーフィングを自動生成(ユーザー発話は非表示)
-        sendSecretaryText('今日のスケジュールのまとめと、今日やるべきこと・準備すべきことを教えて', true);
-      }
-    });
+    await loadSStatus();
+    renderSSug();
+    if (!SCHAT.length) {
+      // 履歴が空のときだけ、今日のブリーフィングを自動生成(ユーザー発話は非表示)
+      sendSecretaryText('今日のスケジュールのまとめと、今日やるべきこと・準備すべきことを教えて', true);
+    }
   }
   setTimeout(() => { const i = $('s-input'); if (i) i.focus(); }, 320);
 }
@@ -1981,7 +2077,6 @@ function renderSChat() {
   if (sBusy) html += '<div class="styping"><span></span><span></span><span></span></div>';
   box.innerHTML = html;
   box.scrollTop = box.scrollHeight;
-  saveSChat();
 }
 
 function renderSSug() {
@@ -2012,7 +2107,7 @@ function sendSecretary(ev) {
 async function sendSecretaryText(text, silent) {
   if (sBusy) return;
   SCHAT.push({ role: 'user', content: text, hidden: !!silent });
-  sBusy = true; updateSendBtn(); renderSChat();
+  sBusy = true; updateSendBtn(); renderSChat(); saveSChat();
   try {
     const r = await fetch('/api/secretary/chat', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2021,6 +2116,7 @@ async function sendSecretaryText(text, silent) {
     const j = await r.json();
     if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
     SCHAT.push({ role: 'assistant', content: j.reply });
+    saveSChat();   // 会話が成立したらサーバーへ保存(端末間で共有)
   } catch (e) {
     SCHAT.push({ role: 'assistant', content: '応答を取得できませんでした: ' + e.message, error: true });
   } finally {
