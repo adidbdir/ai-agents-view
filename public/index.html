@@ -1790,7 +1790,28 @@ gtick();
 setInterval(gtick, 60000);
 
 /* ══════════ 秘書アシスタント・チャット ══════════ */
-let SCHAT = [];          // {role, content, hidden?, error?}
+// 秘書チャットの履歴は localStorage に約1日分保存し、リロード後も復元する
+const SCHAT_KEY = 'schat:v1';
+const SCHAT_TTL_MS = 24 * 60 * 60 * 1000; // 約1日
+function loadStoredSChat() {
+  try {
+    const raw = localStorage.getItem(SCHAT_KEY);
+    if (!raw) return [];
+    const o = JSON.parse(raw);
+    if (!o || !Array.isArray(o.items)) return [];
+    if (!o.at || (Date.now() - o.at) > SCHAT_TTL_MS) { localStorage.removeItem(SCHAT_KEY); return []; }
+    return o.items;
+  } catch { return []; }
+}
+function saveSChat() {
+  try {
+    // エラー吹き出しは保存しない(再送時の履歴汚染を避ける)
+    const items = SCHAT.filter((m) => !m.error);
+    localStorage.setItem(SCHAT_KEY, JSON.stringify({ at: Date.now(), items }));
+  } catch {}
+}
+
+let SCHAT = loadStoredSChat();   // {role, content, hidden?, error?}
 let sBusy = false;
 let sStatus = null;      // {configured, model, calendarLinked}
 let sGreeted = false;
@@ -1837,6 +1858,7 @@ function renderSChat() {
   if (sBusy) html += '<div class="styping"><span></span><span></span><span></span></div>';
   box.innerHTML = html;
   box.scrollTop = box.scrollHeight;
+  saveSChat();
 }
 
 function renderSSug() {
