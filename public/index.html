@@ -584,9 +584,22 @@
 
   <!-- ミニ表示(PiP)の中身。通常は非表示、PiP ウィンドウに移して使う -->
   <div id="mini" class="mini">
-    <div class="mini-head"><span class="mini-title">AI Agents</span><span class="mini-badge">—</span></div>
-    <div class="mini-list"></div>
-    <div class="mini-foot"></div>
+    <div class="mini-screen" data-screen="list">
+      <div class="mini-head"><span class="mini-title">AI Agents</span><span class="mini-badge">—</span></div>
+      <div class="mini-list"></div>
+      <button class="mini-secretary-btn" data-act="secretary">💬 秘書アシスタントに相談</button>
+      <div class="mini-foot"></div>
+    </div>
+    <div class="mini-screen" data-screen="detail" hidden>
+      <div class="mini-head"><button class="mini-back" data-act="back" title="戻る">‹</button><span class="mini-dtitle"></span></div>
+      <div class="mini-dbadges"></div>
+      <div class="mini-dbody"></div>
+    </div>
+    <div class="mini-screen" data-screen="secretary" hidden>
+      <div class="mini-head"><button class="mini-back" data-act="back" title="戻る">‹</button><span class="mini-stitle">秘書アシスタント</span></div>
+      <div class="mini-schat"></div>
+      <form class="mini-sform"><input class="mini-sinput" type="text" placeholder="予定・タスクを相談…" maxlength="2000" autocomplete="off"><button type="submit" class="mini-ssend">送信</button></form>
+    </div>
   </div>
 </div>
 
@@ -1458,17 +1471,24 @@ $('range').addEventListener('change', () => { lastRenderKey = null; render(); })
 const MINI = $('mini');           // 参照を保持(PiP へ移動しても有効)
 let pipWin = null;                                     // Document PiP ウィンドウ
 let pipVideo = null, pipCanvas = null, pipCtx = null, pipStream = null, pipTimer = null;
+let miniView = 'list';            // 'list' | 'detail' | 'secretary'
+let miniDetailId = null;
 
 const MINI_CSS = `
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif; background:#141e2b; color:#e8eef6; overflow:hidden; }
   .mini { display:flex; flex-direction:column; height:100vh; padding:12px 14px; }
-  .mini-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  .mini-title { font-size:15px; font-weight:800; color:#fff; letter-spacing:.02em; }
-  .mini-badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; background:#33475b; color:#cfe0ea; white-space:nowrap; }
+  .mini-screen { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .mini-screen[hidden] { display:none; }
+  .mini-head { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .mini-title, .mini-dtitle, .mini-stitle { font-size:15px; font-weight:800; color:#fff; letter-spacing:.02em; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mini-badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; background:#33475b; color:#cfe0ea; white-space:nowrap; flex:none; }
   .mini-badge.on { background:#2fb9dd; color:#06303c; }
+  .mini-back { flex:none; width:24px; height:24px; border:none; border-radius:7px; background:rgba(255,255,255,.1); color:#cfe0ea; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
+  .mini-back:hover { background:rgba(255,255,255,.2); }
   .mini-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
-  .mini-row { display:flex; align-items:center; gap:8px; padding:5px 4px; border-radius:8px; }
+  .mini-row { display:flex; align-items:center; gap:8px; padding:6px 5px; border-radius:8px; cursor:pointer; }
+  .mini-row:hover { background:rgba(255,255,255,.07); }
   .mini-dot { width:9px; height:9px; border-radius:50%; flex:none; background:#8496a6; }
   .mini-dot.active { background:#59d2f2; box-shadow:0 0 7px #59d2f2; }
   .mini-dot.recent { background:#3a7bd5; }
@@ -1477,6 +1497,30 @@ const MINI_CSS = `
   .mini-meta { font-size:10.5px; color:#7d8ea0; flex:none; }
   .mini-empty { color:#7d8ea0; font-size:12px; text-align:center; padding:16px 0; }
   .mini-foot { font-size:10px; color:#5f7186; padding-top:7px; border-top:1px solid rgba(255,255,255,.06); margin-top:6px; }
+  .mini-secretary-btn { margin:6px 0 0; padding:9px; border:none; border-radius:10px; cursor:pointer; font-family:inherit;
+    background:linear-gradient(135deg,#4a2f66,#6d4a86); color:#fff; font-size:12.5px; font-weight:700; }
+  .mini-secretary-btn:hover { filter:brightness(1.08); }
+  /* 詳細 */
+  .mini-dbadges { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
+  .mini-dbadge { font-size:10px; font-weight:800; padding:3px 8px; border-radius:999px; background:rgba(255,255,255,.09); color:#cfe0ea; white-space:nowrap; }
+  .mini-dbadge.on { background:#2fb9dd; color:#06303c; }
+  .mini-dbody { flex:1; overflow-y:auto; }
+  .mini-sess { background:rgba(255,255,255,.05); border-radius:9px; padding:8px 10px; margin-bottom:6px; }
+  .mini-sess .nm { font-size:12px; font-weight:700; color:#e8eef6; line-height:1.4; }
+  .mini-sess .mt { font-size:10px; color:#8ea0b2; margin-top:4px; display:flex; flex-wrap:wrap; gap:5px; }
+  .mini-sess .mt b { color:#59d2f2; font-weight:700; }
+  /* 秘書チャット */
+  .mini-schat { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:7px; padding-right:2px; }
+  .mini-bub { max-width:88%; padding:7px 10px; border-radius:11px; font-size:12px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
+  .mini-bub.user { align-self:flex-end; background:#2f6ad0; color:#fff; border-bottom-right-radius:3px; }
+  .mini-bub.bot { align-self:flex-start; background:rgba(255,255,255,.08); color:#e3e9f0; border-bottom-left-radius:3px; }
+  .mini-bub.err { background:rgba(192,57,43,.22); color:#ffb3ab; }
+  .mini-typing { align-self:flex-start; color:#8ea0b2; font-size:11px; padding:2px 4px; }
+  .mini-sform { display:flex; gap:6px; padding-top:8px; }
+  .mini-sinput { flex:1; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); border-radius:9px; color:#fff; font-size:12px; padding:8px 10px; font-family:inherit; }
+  .mini-sinput::placeholder { color:#7d8ea0; }
+  .mini-ssend { flex:none; border:none; border-radius:9px; background:#6d4a86; color:#fff; font-weight:700; font-size:12px; padding:0 13px; cursor:pointer; font-family:inherit; }
+  .mini-ssend:disabled { opacity:.5; cursor:default; }
 `;
 
 function miniRows() {
@@ -1503,7 +1547,7 @@ function updateMini() {
       list.innerHTML = rows.length ? rows.map((p) => {
         const nm = p.name.length > 16 ? p.name.slice(0, 15) + '…' : p.name;
         const meta = (p.remote ? '@' + p.host + ' ・ ' : '') + timeAgo(p.lastTs);
-        return `<div class="mini-row"><span class="mini-dot ${p.status}"></span>`
+        return `<div class="mini-row" data-id="${esc(p.id || p.dirName)}"><span class="mini-dot ${p.status}"></span>`
           + `<span class="mini-name">${esc(nm)}</span>`
           + `<span class="mini-meta">${esc(meta)}</span></div>`;
       }).join('') : '<div class="mini-empty">セッションがありません</div>';
@@ -1512,6 +1556,100 @@ function updateMini() {
     if (foot) foot.textContent = DATA ? '更新 ' + new Date(DATA.generatedAt).toLocaleTimeString('ja-JP') : '接続待ち…';
   }
   if (pipCtx) drawMiniCanvas();
+}
+
+// 画面切替(一覧 / 詳細 / 秘書)。Document PiP でのみ操作可能。
+function showMiniScreen(name) {
+  miniView = name;
+  for (const sc of MINI.querySelectorAll('.mini-screen')) sc.hidden = (sc.dataset.screen !== name);
+  if (name === 'list') updateMini();
+  else if (name === 'detail') renderMiniDetail(miniDetailId);
+  else if (name === 'secretary') renderMiniSChat();
+}
+
+// セッション詳細をミニ内に表示(メインの fillPanel の簡易版)
+function renderMiniDetail(id) {
+  const p = ((DATA && DATA.projects) || []).find((x) => (x.id || x.dirName) === id);
+  if (!p) { showMiniScreen('list'); return; }
+  const title = MINI.querySelector('.mini-dtitle');
+  const badges = MINI.querySelector('.mini-dbadges');
+  const body = MINI.querySelector('.mini-dbody');
+  if (title) title.textContent = p.name;
+  const stLabel = { active: '稼働中', recent: '直近実行', idle: '待機中' }[p.status] || p.status;
+  if (badges) badges.innerHTML =
+      `<span class="mini-dbadge ${p.status === 'active' ? 'on' : ''}">● ${stLabel}</span>`
+    + (p.remote ? `<span class="mini-dbadge">💻 ${esc(p.host)}</span>` : '')
+    + `<span class="mini-dbadge">${p.sessionCount} セッション</span>`
+    + `<span class="mini-dbadge">🔧 ${fmtNum(p.totalToolCalls)}</span>`
+    + `<span class="mini-dbadge">⚡ ${fmtNum(p.outputTokens)}</span>`;
+  if (body) {
+    body.innerHTML = (p.sessions || []).map((s) => {
+      const nm = esc(s.title || s.firstPrompt || s.sessionId.slice(0, 8));
+      const msgs = (s.userMessages || 0) + (s.assistantMessages || 0);
+      const parts = [
+        `<b>${timeAgo(s.lastTs)}</b>`,
+        s.model ? esc(s.model) : '',
+        `💬 ${msgs}`,
+        `⚡ ${fmtNum(s.outputTokens || 0)}`,
+        s.totalAgents ? `🤖 ${s.totalAgents}${s.runningAgents ? '(稼働' + s.runningAgents + ')' : ''}` : '',
+      ].filter(Boolean);
+      return `<div class="mini-sess"><div class="nm"><span class="mini-dot ${s.status}" style="display:inline-block;margin-right:6px"></span>${nm}</div>`
+        + `<div class="mt">${parts.map((x) => `<span>${x}</span>`).join('')}</div></div>`;
+    }).join('') || '<div class="mini-empty">セッションがありません</div>';
+  }
+}
+
+// SCHAT を秘書ミニ画面へ描画(メイン秘書パネルと状態を共有)
+function renderMiniSChat() {
+  const box = MINI.querySelector('.mini-schat');
+  if (!box) return;
+  let html = '';
+  for (const m of SCHAT) {
+    if (m.hidden) continue;
+    html += `<div class="mini-bub ${m.role === 'user' ? 'user' : 'bot'}${m.error ? ' err' : ''}">${esc(m.content)}</div>`;
+  }
+  if (sBusy) html += '<div class="mini-typing">秘書が入力中…</div>';
+  box.innerHTML = html;
+  box.scrollTop = box.scrollHeight;
+  const send = MINI.querySelector('.mini-ssend');
+  if (send) send.disabled = sBusy;
+}
+
+// 秘書ミニ画面を開く(メインパネルと同じ準備・自動ブリーフィング)
+async function openMiniSecretary() {
+  showMiniScreen('secretary');
+  if (!sBusy) { await loadSChatFromServer(); renderSChat(); }
+  if (!sGreeted) {
+    sGreeted = true;
+    await loadSStatus();
+    if (!SCHAT.length) {
+      sendSecretaryText('今日のスケジュールのまとめと、今日やるべきこと・準備すべきことを教えて', true);
+    }
+  }
+}
+
+// ミニ内のクリックはイベント委譲で処理(inline onclick は PiP 側 window を参照するため使えない)
+function miniClick(e) {
+  const act = e.target.closest('[data-act]');
+  if (act) {
+    if (act.dataset.act === 'secretary') openMiniSecretary();
+    else if (act.dataset.act === 'back') showMiniScreen('list');
+    return;
+  }
+  const row = e.target.closest('.mini-row[data-id]');
+  if (row) { miniDetailId = row.dataset.id; showMiniScreen('detail'); }
+}
+MINI.addEventListener('click', miniClick);
+{
+  const f = MINI.querySelector('.mini-sform');
+  if (f) f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const inp = MINI.querySelector('.mini-sinput');
+    const t = inp.value.trim();
+    if (!t || sBusy) return;
+    inp.value = '';
+    sendSecretaryText(t);
+  });
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -1597,7 +1735,7 @@ async function openDocPiP() {
     MINI.style.display = 'flex';
     w.document.body.appendChild(MINI);   // 要素を PiP ウィンドウへ移動
     pipWin = w;
-    updateMini();
+    showMiniScreen('list');
     w.addEventListener('pagehide', closePiPDoc);
     setPipBtn(true);
   } catch (e) {
@@ -1607,6 +1745,7 @@ async function openDocPiP() {
 }
 
 function closePiPDoc() {
+  showMiniScreen('list');   // 次回の表示は一覧から
   if (MINI) { MINI.style.display = 'none'; document.body.appendChild(MINI); } // 本体へ戻す
   pipWin = null;
   setPipBtn(false);
@@ -2308,6 +2447,7 @@ function renderSChat() {
   if (sBusy) html += '<div class="styping"><span></span><span></span><span></span></div>';
   box.innerHTML = html;
   box.scrollTop = box.scrollHeight;
+  renderMiniSChat();   // 秘書ミニ画面(PiP)も同期
 }
 
 function renderSSug() {
