@@ -107,6 +107,7 @@ function parseSession(filePath, stat) {
     hourly: {},           // 'YYYY-MM-DDTHH' -> event count (タイムライン用)
     tailKind: null,       // 末尾メッセージ種別: 'user' | 'assistant'(待ち状態判定用)
     tailStop: null,       // 末尾 assistant の stop_reason ('end_turn' | 'tool_use' 等)
+    lastUserToolResult: false, // 末尾 user がツール結果か(承認待ち判定用)
   };
 
   let content;
@@ -134,6 +135,8 @@ function parseSession(filePath, stat) {
     if (o.type === 'user' && o.message) {
       summary.userMessages++;
       summary.tailKind = 'user'; summary.tailStop = null;
+      summary.lastUserToolResult = Array.isArray(o.message.content)
+        && o.message.content.some((b) => b && b.type === 'tool_result');
       if (!o.isSidechain && isUserPrompt(o.message)) summary.promptCount++;
       if (!summary.firstPrompt && typeof o.message.content === 'string') {
         summary.firstPrompt = o.message.content.slice(0, 120);
@@ -218,23 +221,22 @@ function sessionStatus(s, now) {
   return 'idle';
 }
 
-// 末尾が未完了の tool_use で、この時間応答が無ければ「対応待ち」とみなす。
-// 記録上は「承認待ちで停止」と「実行に時間がかかっているツール」を区別できないため、
-// 実態は「ツールがこの秒数以上保留」を表す(承認プロンプトも長時間ツールも含む)。
+// この時間、Claude の応答が進まなければ「対応待ち(承認プロンプト等で停止)」とみなす。
 const APPROVAL_IDLE_MS = 15000;
 /**
- * セッションが人の対応を待っているか判定する。
- *  - 'input'    : 末尾が assistant の完了応答(end_turn 等) → ユーザーの番
- *  - 'approval' : 末尾が未完了の tool_use のまま一定時間停止 → 対応待ち(承認/長時間ツール)
- *  - null       : 末尾が tool_result 等 → Claude が応答中(作業中)
+ * セッションが人の対応(承認プロンプト等)を待って停止しているか判定する。
+ * 手動承認の保留中は、保留中の tool_use が記録に書き出されないため、末尾は
+ * 直前の tool_result(user) のまま止まる。そこで「ツール実行が未完了のまま
+ * 一定時間 Claude の出力が進まない」状態を対応待ちとみなす:
+ *   - 末尾が assistant の未完了 tool_use のまま停止(自動承認だが長時間 等)
+ *   - 末尾が user のツール結果のまま無応答で停止(承認プロンプトの典型)
+ * いずれも「作業が途中で止まっている」ことを表す。end_turn(会話終了)は対象外。
  */
 function sessionWaiting(s, now) {
-  if (s.tailKind !== 'assistant') return null;
-  if (s.tailStop === 'tool_use') {
-    const last = s.lastTs ? Date.parse(s.lastTs) : s.fileMtime;
-    return (now - last) > APPROVAL_IDLE_MS ? 'approval' : null;
-  }
-  if (s.tailStop === 'end_turn' || s.tailStop === 'max_tokens' || s.tailStop === 'stop_sequence') return 'input';
+  const last = s.lastTs ? Date.parse(s.lastTs) : s.fileMtime;
+  if ((now - last) <= APPROVAL_IDLE_MS) return null;   // 実行中/生成中はまだ待ちとしない
+  if (s.tailKind === 'assistant' && s.tailStop === 'tool_use') return 'approval';
+  if (s.tailKind === 'user' && s.lastUserToolResult) return 'approval';
   return null;
 }
 
