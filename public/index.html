@@ -161,6 +161,9 @@
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
   .blink  { animation: blink 1.6s ease-in-out infinite; }
   .blink2 { animation: blink 1.6s ease-in-out infinite; animation-delay: .8s; }
+  /* 挙手(入力/承認待ち): 肩を軸に手を振る */
+  @keyframes wave { 0%,100% { transform: rotate(-9deg); } 50% { transform: rotate(13deg); } }
+  .wave { transform-origin: center bottom; transform-box: fill-box; animation: wave .9s ease-in-out infinite; }
 
   /* ── 詳細パネル ─────────────────────────────── */
   .panel {
@@ -585,7 +588,7 @@
   <!-- ミニ表示(PiP)の中身。通常は非表示、PiP ウィンドウに移して使う -->
   <div id="mini" class="mini">
     <div class="mini-screen" data-screen="list">
-      <div class="mini-head"><span class="mini-title">AI Agents</span><span class="mini-badge">—</span></div>
+      <div class="mini-head"><span class="mini-title">AI Agents</span><span class="mini-wait-badge" hidden></span><span class="mini-badge">—</span></div>
       <div class="mini-list"></div>
       <button class="mini-secretary-btn" data-act="secretary">💬 秘書アシスタントに相談</button>
       <div class="mini-foot"></div>
@@ -795,7 +798,7 @@ function tilePath(w, hh) {
 function person(opts = {}) {
   const {
     pose = 'stand', suit = '#2c4157', shirt = '#d9e9f4',
-    skin = '#f2c9a2', hair = '#26343f', flip = false, anim = null,
+    skin = '#f2c9a2', hair = '#26343f', flip = false, anim = null, raise = false,
   } = opts;
   const outer = el('g', { transform: flip ? 'scale(-1,1)' : '' });
   const g = el('g', anim ? { class: anim } : {});
@@ -815,17 +818,25 @@ function person(opts = {}) {
   }));
   // シャツ襟元
   g.appendChild(el('path', { d: 'M-2.6,-37.5 L0,-30.5 L2.6,-37.5 Z', fill: shirt }));
-  // 腕
+  // 腕(raise 指定時は右腕を頭上へ上げて手を振る)
   if (pose === 'present') {
     g.appendChild(el('path', { d: 'M-7,-35 C-10,-30 -10.5,-24 -9.5,-19', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7,-35 C12,-37 16,-40 19,-43', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('circle', { cx: 20, cy: -44, r: 2.4, fill: skin }));
+    if (!raise) {
+      g.appendChild(el('path', { d: 'M7,-35 C12,-37 16,-40 19,-43', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+      g.appendChild(el('circle', { cx: 20, cy: -44, r: 2.4, fill: skin }));
+    }
   } else if (pose === 'work') {
     g.appendChild(el('path', { d: 'M-7,-34 C-10,-30 -9,-26 -5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7,-34 C10,-30 9,-26 5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    if (!raise) g.appendChild(el('path', { d: 'M7,-34 C10,-30 9,-26 5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
   } else {
     g.appendChild(el('path', { d: 'M-7.5,-35 C-10,-29 -10.5,-23 -9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7.5,-35 C10,-29 10.5,-23 9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    if (!raise) g.appendChild(el('path', { d: 'M7.5,-35 C10,-29 10.5,-23 9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+  }
+  if (raise) {
+    const arm = el('g', { class: 'wave' });
+    arm.appendChild(el('path', { d: 'M6,-35 C12,-42 15,-50 14,-57', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+    arm.appendChild(el('circle', { cx: 14, cy: -58, r: 2.9, fill: skin }));
+    g.appendChild(arm);
   }
   // 頭・髪
   g.appendChild(el('circle', { cx: 0, cy: -45.5, r: 6.2, fill: skin }));
@@ -853,13 +864,14 @@ function workstation(p) {
     }));
   }
 
-  // 人物(デスクの奥 = 先に描いて脚を隠す)
+  // 人物(デスクの奥 = 先に描いて脚を隠す)。待ち状態なら手を上げる
+  const waiting = p.waiting || null;
   if (active) {
-    const pw = person({ pose: 'work', suit: '#20536b', shirt: '#bfeaf7', anim: 'bob' });
+    const pw = person({ pose: 'work', suit: '#20536b', shirt: '#bfeaf7', anim: 'bob', raise: !!waiting });
     pw.setAttribute('transform', 'translate(14,-30) scale(1.05)');
     g.appendChild(pw);
   } else if (recent) {
-    const ps = person({ pose: 'stand', suit: '#31567d' });
+    const ps = person({ pose: 'stand', suit: '#31567d', raise: !!waiting });
     ps.setAttribute('transform', 'translate(-52,4) scale(1.02)');
     g.appendChild(ps);
   }
@@ -925,6 +937,21 @@ function workstation(p) {
     + (nAgents ? ` ・ 🤖×${nAgents}` : ''));
   plate.appendChild(t1); plate.appendChild(t2);
   g.appendChild(plate);
+
+  // 待ち状態の吹き出し(頭上・最前面)。approval=オレンジ「!」/ input=シアン「✋」
+  if (waiting && (active || recent)) {
+    const ap = waiting === 'approval';
+    const pos = active ? { x: 22, y: -86 } : { x: -52, y: -52 };
+    const b = el('g', { transform: `translate(${pos.x},${pos.y})`, class: 'bob' });
+    b.appendChild(el('circle', { cx: 0, cy: 0, r: 11.5, fill: ap ? '#ef8b3c' : '#2fb9dd', stroke: '#fff', 'stroke-width': 2.4, filter: 'url(#soft)' }));
+    const ic = el('text', {
+      x: 0, y: ap ? 5.5 : 4.5, 'text-anchor': 'middle',
+      'font-size': ap ? 16 : 13, 'font-weight': 800, fill: '#fff',
+    });
+    txt(ic, ap ? '!' : '✋');
+    b.appendChild(ic);
+    g.appendChild(b);
+  }
 
   return g;
 }
@@ -1484,6 +1511,14 @@ const MINI_CSS = `
   .mini-title, .mini-dtitle, .mini-stitle { font-size:15px; font-weight:800; color:#fff; letter-spacing:.02em; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .mini-badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; background:#33475b; color:#cfe0ea; white-space:nowrap; flex:none; }
   .mini-badge.on { background:#2fb9dd; color:#06303c; }
+  .mini-wait-badge { font-size:11px; font-weight:800; padding:3px 9px; border-radius:999px; white-space:nowrap; flex:none; background:#ef8b3c; color:#fff; }
+  .mini-wait-badge.input { background:#2fb9dd; color:#06303c; }
+  .mini-wait-badge[hidden] { display:none; }
+  .mini-wait { flex:none; display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px; border-radius:6px; font-size:11px; font-weight:800; }
+  .mini-wait.ap { background:#ef8b3c; color:#fff; }
+  .mini-wait.in { background:#2fb9dd; color:#06303c; }
+  .mini-row.waiting { background:rgba(47,185,221,.09); }
+  .mini-row.waiting.ap { background:rgba(239,139,60,.14); }
   .mini-back { flex:none; width:24px; height:24px; border:none; border-radius:7px; background:rgba(255,255,255,.1); color:#cfe0ea; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
   .mini-back:hover { background:rgba(255,255,255,.2); }
   .mini-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
@@ -1504,6 +1539,8 @@ const MINI_CSS = `
   .mini-dbadges { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
   .mini-dbadge { font-size:10px; font-weight:800; padding:3px 8px; border-radius:999px; background:rgba(255,255,255,.09); color:#cfe0ea; white-space:nowrap; }
   .mini-dbadge.on { background:#2fb9dd; color:#06303c; }
+  .mini-dbadge.wait.ap { background:#ef8b3c; color:#fff; }
+  .mini-dbadge.wait.in { background:#2fb9dd; color:#06303c; }
   .mini-dbody { flex:1; overflow-y:auto; }
   .mini-sess { background:rgba(255,255,255,.05); border-radius:9px; padding:8px 10px; margin-bottom:6px; }
   .mini-sess .nm { font-size:12px; font-weight:700; color:#e8eef6; line-height:1.4; }
@@ -1534,6 +1571,10 @@ function miniRows() {
 function miniActiveCount() {
   return ((DATA && DATA.projects) || []).filter((p) => p.status === 'active').length;
 }
+function miniWaitCount() {
+  const ps = (DATA && DATA.projects) || [];
+  return { approval: ps.filter((p) => p.waiting === 'approval').length, input: ps.filter((p) => p.waiting === 'input').length };
+}
 
 // HTML(Document PiP)と canvas(映像PiP)の両方を最新化する
 function updateMini() {
@@ -1541,14 +1582,26 @@ function updateMini() {
     const act = miniActiveCount();
     const badge = MINI.querySelector('.mini-badge');
     if (badge) { badge.textContent = act > 0 ? act + ' 稼働中' : '待機中'; badge.className = 'mini-badge' + (act > 0 ? ' on' : ''); }
+    // 要対応(入力/承認待ち)のヘッダーバッジ
+    const wc = miniWaitCount();
+    const wtot = wc.approval + wc.input;
+    const wb = MINI.querySelector('.mini-wait-badge');
+    if (wb) {
+      wb.hidden = wtot === 0;
+      wb.textContent = '要対応 ' + wtot;
+      wb.className = 'mini-wait-badge' + (wc.approval ? '' : ' input');
+    }
     const list = MINI.querySelector('.mini-list');
     if (list) {
       const rows = miniRows();
       list.innerHTML = rows.length ? rows.map((p) => {
         const nm = p.name.length > 16 ? p.name.slice(0, 15) + '…' : p.name;
         const meta = (p.remote ? '@' + p.host + ' ・ ' : '') + timeAgo(p.lastTs);
-        return `<div class="mini-row" data-id="${esc(p.id || p.dirName)}"><span class="mini-dot ${p.status}"></span>`
-          + `<span class="mini-name">${esc(nm)}</span>`
+        const w = p.waiting === 'approval' ? '<span class="mini-wait ap">!</span>'
+          : p.waiting === 'input' ? '<span class="mini-wait in">✋</span>' : '';
+        const cls = 'mini-row' + (p.waiting === 'approval' ? ' waiting ap' : p.waiting ? ' waiting' : '');
+        return `<div class="${cls}" data-id="${esc(p.id || p.dirName)}"><span class="mini-dot ${p.status}"></span>`
+          + `<span class="mini-name">${esc(nm)}</span>${w}`
           + `<span class="mini-meta">${esc(meta)}</span></div>`;
       }).join('') : '<div class="mini-empty">セッションがありません</div>';
     }
@@ -1576,8 +1629,11 @@ function renderMiniDetail(id) {
   const body = MINI.querySelector('.mini-dbody');
   if (title) title.textContent = p.name;
   const stLabel = { active: '稼働中', recent: '直近実行', idle: '待機中' }[p.status] || p.status;
+  const waitBadge = p.waiting === 'approval' ? '<span class="mini-dbadge wait ap">✋ 承認待ち</span>'
+    : p.waiting === 'input' ? '<span class="mini-dbadge wait in">✋ 入力待ち</span>' : '';
   if (badges) badges.innerHTML =
       `<span class="mini-dbadge ${p.status === 'active' ? 'on' : ''}">● ${stLabel}</span>`
+    + waitBadge
     + (p.remote ? `<span class="mini-dbadge">💻 ${esc(p.host)}</span>` : '')
     + `<span class="mini-dbadge">${p.sessionCount} セッション</span>`
     + `<span class="mini-dbadge">🔧 ${fmtNum(p.totalToolCalls)}</span>`
@@ -1586,7 +1642,10 @@ function renderMiniDetail(id) {
     body.innerHTML = (p.sessions || []).map((s) => {
       const nm = esc(s.title || s.firstPrompt || s.sessionId.slice(0, 8));
       const msgs = (s.userMessages || 0) + (s.assistantMessages || 0);
+      const wl = s.waiting === 'approval' ? '<b style="color:#ef8b3c">✋ 承認待ち</b>'
+        : s.waiting === 'input' ? '<b style="color:#59d2f2">✋ 入力待ち</b>' : '';
       const parts = [
+        wl,
         `<b>${timeAgo(s.lastTs)}</b>`,
         s.model ? esc(s.model) : '',
         `💬 ${msgs}`,
@@ -1679,6 +1738,18 @@ function drawMiniCanvas() {
   roundRect(ctx, W - 16 - bw, 16, bw, 21, 10); ctx.fill();
   ctx.fillStyle = act > 0 ? '#06303c' : '#cfe0ea';
   ctx.fillText(bText, W - 16 - bw + 9, 31);
+  // 要対応(入力/承認待ち)バッジ(稼働中バッジの左)
+  const wc = miniWaitCount();
+  const wtot = wc.approval + wc.input;
+  if (wtot > 0) {
+    const wText = '要対応 ' + wtot;
+    const ww = ctx.measureText(wText).width + 18;
+    const wx = W - 16 - bw - 7 - ww;
+    ctx.fillStyle = wc.approval ? '#ef8b3c' : '#2fb9dd';
+    roundRect(ctx, wx, 16, ww, 21, 10); ctx.fill();
+    ctx.fillStyle = wc.approval ? '#ffffff' : '#06303c';
+    ctx.fillText(wText, wx + 9, 31);
+  }
   // 行
   const rows = miniRows();
   ctx.textBaseline = 'middle';
@@ -1693,11 +1764,24 @@ function drawMiniCanvas() {
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(23, y + 10, 5, 0, Math.PI * 2); ctx.fill();
     if (p.status === 'active') ctx.restore();
     ctx.fillStyle = '#e8eef6'; ctx.font = '600 13px -apple-system,"Hiragino Sans",sans-serif';
-    const nm = p.name.length > 16 ? p.name.slice(0, 15) + '…' : p.name;
+    const nm = p.name.length > (p.waiting ? 13 : 16) ? p.name.slice(0, (p.waiting ? 12 : 15)) + '…' : p.name;
     ctx.fillText(nm, 38, y + 10);
     ctx.fillStyle = '#7d8ea0'; ctx.font = '500 11px -apple-system,"Hiragino Sans",sans-serif';
     const meta = timeAgo(p.lastTs);
-    ctx.fillText(meta, W - 16 - ctx.measureText(meta).width, y + 10);
+    const mw = ctx.measureText(meta).width;
+    ctx.fillText(meta, W - 16 - mw, y + 10);
+    // 待ちバッジ(経過時間の左)
+    if (p.waiting) {
+      const ap = p.waiting === 'approval';
+      const label = ap ? '!' : '✋';
+      ctx.font = '800 11px -apple-system,"Hiragino Sans",sans-serif';
+      const lw = ctx.measureText(label).width, pbw = lw + 11;
+      const bx = W - 16 - mw - 8 - pbw;
+      ctx.fillStyle = ap ? '#ef8b3c' : '#2fb9dd';
+      roundRect(ctx, bx, y + 2, pbw, 16, 5); ctx.fill();
+      ctx.fillStyle = ap ? '#ffffff' : '#06303c';
+      ctx.fillText(label, bx + 5.5, y + 10);
+    }
     y += 30;
     if (y > H - 34) break;
   }

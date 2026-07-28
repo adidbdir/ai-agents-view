@@ -105,6 +105,8 @@ function parseSession(filePath, stat) {
     fileMtime: stat.mtimeMs,
     fileSize: stat.size,
     hourly: {},           // 'YYYY-MM-DDTHH' -> event count (タイムライン用)
+    tailKind: null,       // 末尾メッセージ種別: 'user' | 'assistant'(待ち状態判定用)
+    tailStop: null,       // 末尾 assistant の stop_reason ('end_turn' | 'tool_use' 等)
   };
 
   let content;
@@ -131,6 +133,7 @@ function parseSession(filePath, stat) {
 
     if (o.type === 'user' && o.message) {
       summary.userMessages++;
+      summary.tailKind = 'user'; summary.tailStop = null;
       if (!o.isSidechain && isUserPrompt(o.message)) summary.promptCount++;
       if (!summary.firstPrompt && typeof o.message.content === 'string') {
         summary.firstPrompt = o.message.content.slice(0, 120);
@@ -142,6 +145,7 @@ function parseSession(filePath, stat) {
     } else if (o.type === 'assistant' && o.message) {
       summary.assistantMessages++;
       const m = o.message;
+      summary.tailKind = 'assistant'; summary.tailStop = m.stop_reason || null;
       if (m.model) summary.model = m.model;
       if (m.usage) {
         summary.outputTokens += m.usage.output_tokens || 0;
@@ -214,6 +218,24 @@ function sessionStatus(s, now) {
   return 'idle';
 }
 
+// 末尾が未完了の tool_use で、この時間応答が無ければ承認/確認待ちとみなす
+const APPROVAL_IDLE_MS = 30000;
+/**
+ * セッションが人の入力/承認を待っているか判定する。
+ *  - 'input'    : 末尾が assistant の完了応答(end_turn 等) → ユーザーの番
+ *  - 'approval' : 末尾が未完了の tool_use のまま一定時間停止 → 承認/確認待ち(推定)
+ *  - null       : 末尾が tool_result 等 → Claude が応答中(作業中)
+ */
+function sessionWaiting(s, now) {
+  if (s.tailKind !== 'assistant') return null;
+  if (s.tailStop === 'tool_use') {
+    const last = s.lastTs ? Date.parse(s.lastTs) : s.fileMtime;
+    return (now - last) > APPROVAL_IDLE_MS ? 'approval' : null;
+  }
+  if (s.tailStop === 'end_turn' || s.tailStop === 'max_tokens' || s.tailStop === 'stop_sequence') return 'input';
+  return null;
+}
+
 /** 全プロジェクトを走査して集計を返す */
 function collect() {
   const now = Date.now();
@@ -242,6 +264,8 @@ function collect() {
       try { stat = fs.statSync(fp); } catch { continue; }
       const s = parseSession(fp, stat);
       s.status = sessionStatus(s, now);
+      // 待ち状態は人が居る(active/recent)セッションのみ対象にする
+      s.waiting = (s.status === 'active' || s.status === 'recent') ? sessionWaiting(s, now) : null;
       s.agents = parseAgents(path.join(projDir, s.sessionId), now);
       s.totalAgents = s.agents.length;
       s.runningAgents = s.agents.filter((a) => a.running).length;
@@ -260,6 +284,9 @@ function collect() {
       sessionCount: sessions.length,
       status: sessions.some((s) => s.status === 'active') ? 'active'
         : sessions.some((s) => s.status === 'recent') ? 'recent' : 'idle',
+      // 待ち: 承認待ちを優先、次に入力待ち(手を上げる表示に使う)
+      waiting: sessions.some((s) => s.waiting === 'approval') ? 'approval'
+        : sessions.some((s) => s.waiting === 'input') ? 'input' : null,
       lastTs: sessions[0]?.lastTs || null,
       totalToolCalls: sessions.reduce((a, s) => a + s.totalToolCalls, 0),
       outputTokens: sessions.reduce((a, s) => a + s.outputTokens, 0),
