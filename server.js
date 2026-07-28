@@ -218,12 +218,14 @@ function sessionStatus(s, now) {
   return 'idle';
 }
 
-// 末尾が未完了の tool_use で、この時間応答が無ければ承認/確認待ちとみなす
-const APPROVAL_IDLE_MS = 30000;
+// 末尾が未完了の tool_use で、この時間応答が無ければ「対応待ち」とみなす。
+// 記録上は「承認待ちで停止」と「実行に時間がかかっているツール」を区別できないため、
+// 実態は「ツールがこの秒数以上保留」を表す(承認プロンプトも長時間ツールも含む)。
+const APPROVAL_IDLE_MS = 15000;
 /**
- * セッションが人の入力/承認を待っているか判定する。
+ * セッションが人の対応を待っているか判定する。
  *  - 'input'    : 末尾が assistant の完了応答(end_turn 等) → ユーザーの番
- *  - 'approval' : 末尾が未完了の tool_use のまま一定時間停止 → 承認/確認待ち(推定)
+ *  - 'approval' : 末尾が未完了の tool_use のまま一定時間停止 → 対応待ち(承認/長時間ツール)
  *  - null       : 末尾が tool_result 等 → Claude が応答中(作業中)
  */
 function sessionWaiting(s, now) {
