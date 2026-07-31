@@ -18,6 +18,15 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 4370;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const HOSTNAME = process.env.HOST_LABEL || os.hostname().split('.')[0];
+const DATA_DIR = path.join(__dirname, 'data');
+const HUSTLER_DIR = path.join(DATA_DIR, 'hustler');
+const HUSTLER_OUTPUTS_DIR = path.join(HUSTLER_DIR, 'outputs');
+const HUSTLER_JOBS_PATH = path.join(HUSTLER_DIR, 'jobs.json');
+const HUSTLER_REVENUE_PATH = path.join(HUSTLER_DIR, 'revenue.json');
+const HUSTLER_CONFIG_PATH = path.join(__dirname, 'hustler-config.json');
+const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
+const HUSTLER_CHECK_MS = 10 * 60 * 1000;
+const HUSTLER_TOKEN_HEADROOM = 120000;
 
 /**
  * ピア(他のPCで動いている ai-agents-view)の一覧。
@@ -106,6 +115,7 @@ function parseSession(filePath, stat) {
     fileSize: stat.size,
     hourly: {},           // 'YYYY-MM-DDTHH' -> event count (タイムライン用)
   };
+  Object.defineProperty(summary, 'usageEvents', { value: [], enumerable: false, writable: true });
 
   let content;
   try {
@@ -144,11 +154,26 @@ function parseSession(filePath, stat) {
       const m = o.message;
       if (m.model) summary.model = m.model;
       if (m.usage) {
-        summary.outputTokens += m.usage.output_tokens || 0;
-        summary.inputTokens +=
-          (m.usage.input_tokens || 0) +
-          (m.usage.cache_creation_input_tokens || 0) +
-          (m.usage.cache_read_input_tokens || 0);
+        const outputTokens = m.usage.output_tokens || 0;
+        const baseInputTokens = m.usage.input_tokens || 0;
+        const cacheCreationInputTokens = m.usage.cache_creation_input_tokens || 0;
+        const cacheReadInputTokens = m.usage.cache_read_input_tokens || 0;
+        const inputTokens = baseInputTokens + cacheCreationInputTokens + cacheReadInputTokens;
+        summary.outputTokens += outputTokens;
+        summary.inputTokens += inputTokens;
+        if (ts) {
+          const atMs = Date.parse(ts);
+          if (Number.isFinite(atMs) && (inputTokens || outputTokens)) {
+            summary.usageEvents.push({
+              atMs,
+              inputTokens,
+              outputTokens,
+              baseInputTokens,
+              cacheCreationInputTokens,
+              cacheReadInputTokens,
+            });
+          }
+        }
       }
       if (Array.isArray(m.content)) {
         for (const c of m.content) {
@@ -363,7 +388,18 @@ function resolveClaudeCli(pref) {
     path.join(os.homedir(), '.local/bin/claude'),
     '/opt/homebrew/bin/claude', '/usr/local/bin/claude',
   ].filter(Boolean);
-  for (const p of list) { try { if (fs.existsSync(p)) return p; } catch { /* ignore */ } }
+  const seen = new Set();
+  for (const p of list) {
+    seen.add(p);
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
+  const pathDirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const p = path.join(dir, 'claude');
+    if (seen.has(p)) continue;
+    seen.add(p);
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
   return null;
 }
 
@@ -493,6 +529,572 @@ function loadExplorerConfig() {
   return { mode, apiKey: base.apiKey, model: model || base.model, cli: base.cli };
 }
 
+const DEFAULT_HUSTLER_CONFIG = {
+  enabled: false,
+  activeHours: '22-8',
+  idleMinutes: 15,
+  tokenBudget5h: 2000000,
+  maxRunsPerDay: 8,
+};
+
+let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function ensureHustlerStorage() {
+  ensureDir(HUSTLER_OUTPUTS_DIR);
+  if (!fs.existsSync(HUSTLER_JOBS_PATH)) fs.writeFileSync(HUSTLER_JOBS_PATH, '[]\n');
+  if (!fs.existsSync(HUSTLER_REVENUE_PATH)) fs.writeFileSync(HUSTLER_REVENUE_PATH, '[]\n');
+  if (!fs.existsSync(HUSTLER_CONFIG_PATH)) {
+    fs.writeFileSync(HUSTLER_CONFIG_PATH, JSON.stringify(DEFAULT_HUSTLER_CONFIG, null, 2) + '\n');
+  }
+}
+
+function makeId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readJsonFileSafe(filePath, fallback) {
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return fallback; }
+}
+
+function parseClockMinutes(raw) {
+  const m = String(raw).trim().match(/^(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2] || 0);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm) || mm < 0 || mm > 59) return null;
+  if (hh === 24 && mm === 0) return 24 * 60;
+  if (hh < 0 || hh > 23) return null;
+  return hh * 60 + mm;
+}
+
+function normalizeActiveHours(raw) {
+  const src = typeof raw === 'string' ? raw : '';
+  const parts = src.split(',').map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  for (const part of parts) {
+    const m = part.match(/^([^-\s]+)\s*-\s*([^-\s]+)$/);
+    if (!m) continue;
+    const start = parseClockMinutes(m[1]);
+    const end = parseClockMinutes(m[2]);
+    if (start == null || end == null) continue;
+    out.push(`${m[1].trim()}-${m[2].trim()}`);
+  }
+  return out.join(',') || DEFAULT_HUSTLER_CONFIG.activeHours;
+}
+
+function isWithinActiveHours(spec, now = new Date()) {
+  const parts = String(spec || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return true;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  for (const part of parts) {
+    const m = part.match(/^([^-\s]+)\s*-\s*([^-\s]+)$/);
+    if (!m) continue;
+    const start = parseClockMinutes(m[1]);
+    const end = parseClockMinutes(m[2]);
+    if (start == null || end == null) continue;
+    if (start === end) return true;
+    if (start < end && cur >= start && cur < end) return true;
+    if (start > end && (cur >= start || cur < end)) return true;
+  }
+  return false;
+}
+
+function sanitizeHustlerConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    enabled: !!src.enabled,
+    activeHours: normalizeActiveHours(src.activeHours),
+    idleMinutes: Math.max(1, Math.min(180, Number(src.idleMinutes) || DEFAULT_HUSTLER_CONFIG.idleMinutes)),
+    tokenBudget5h: Math.max(10000, Math.min(20000000, Math.round(Number(src.tokenBudget5h) || DEFAULT_HUSTLER_CONFIG.tokenBudget5h))),
+    maxRunsPerDay: Math.max(1, Math.min(48, Math.round(Number(src.maxRunsPerDay) || DEFAULT_HUSTLER_CONFIG.maxRunsPerDay))),
+  };
+}
+
+function loadHustlerConfig() {
+  const stored = readJsonFileSafe(HUSTLER_CONFIG_PATH, DEFAULT_HUSTLER_CONFIG);
+  return sanitizeHustlerConfig({ ...DEFAULT_HUSTLER_CONFIG, ...stored });
+}
+
+function saveHustlerConfig(config) {
+  const clean = sanitizeHustlerConfig(config);
+  fs.writeFileSync(HUSTLER_CONFIG_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function normalizeHustlerJob(job) {
+  if (!job || typeof job !== 'object') return null;
+  const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(job.type) ? job.type : 'custom';
+  return {
+    id: typeof job.id === 'string' ? job.id : makeId('job'),
+    type,
+    topic: typeof job.topic === 'string' ? job.topic.slice(0, 500) : '',
+    prompt: typeof job.prompt === 'string' ? job.prompt.slice(0, 12000) : '',
+    status: ['pending', 'running', 'done', 'error'].includes(job.status) ? job.status : 'pending',
+    createdAt: typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString(),
+    startedAt: typeof job.startedAt === 'string' ? job.startedAt : null,
+    finishedAt: typeof job.finishedAt === 'string' ? job.finishedAt : null,
+    outputId: typeof job.outputId === 'string' ? job.outputId : null,
+    error: typeof job.error === 'string' ? job.error.slice(0, 500) : null,
+  };
+}
+
+function loadHustlerJobs() {
+  ensureHustlerStorage();
+  const arr = readJsonFileSafe(HUSTLER_JOBS_PATH, []);
+  return Array.isArray(arr) ? arr.map(normalizeHustlerJob).filter(Boolean) : [];
+}
+
+function saveHustlerJobs(jobs) {
+  ensureHustlerStorage();
+  fs.writeFileSync(HUSTLER_JOBS_PATH, JSON.stringify(jobs, null, 2) + '\n');
+}
+
+function resetStaleHustlerJobs() {
+  const jobs = loadHustlerJobs();
+  let changed = false;
+  for (const job of jobs) {
+    if (job.status === 'running') {
+      job.status = 'pending';
+      job.error = 'サーバー再起動により待機へ戻しました';
+      changed = true;
+    }
+  }
+  if (changed) saveHustlerJobs(jobs);
+}
+
+function loadHustlerRevenue() {
+  ensureHustlerStorage();
+  const arr = readJsonFileSafe(HUSTLER_REVENUE_PATH, []);
+  return Array.isArray(arr)
+    ? arr
+      .filter((x) => x && typeof x === 'object')
+      .map((x) => ({
+        id: typeof x.id === 'string' ? x.id : makeId('rev'),
+        date: typeof x.date === 'string' ? x.date.slice(0, 10) : localDateStr(),
+        amount: Number(x.amount) || 0,
+        memo: typeof x.memo === 'string' ? x.memo.slice(0, 200) : '',
+      }))
+    : [];
+}
+
+function saveHustlerRevenue(items) {
+  ensureHustlerStorage();
+  fs.writeFileSync(HUSTLER_REVENUE_PATH, JSON.stringify(items, null, 2) + '\n');
+}
+
+function listLocalSessions({ minMtimeMs = 0, skipPrivate = false } = {}) {
+  let dirs;
+  try {
+    dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch { return []; }
+  const out = [];
+  for (const d of dirs) {
+    if (skipPrivate && d.name.startsWith('-private')) continue;
+    const projDir = path.join(PROJECTS_DIR, d.name);
+    let files;
+    try { files = fs.readdirSync(projDir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const fp = path.join(projDir, f);
+      let stat;
+      try { stat = fs.statSync(fp); } catch { continue; }
+      if (stat.mtimeMs < minMtimeMs) continue;
+      const session = parseSession(fp, stat);
+      const lastMs = session.lastTs ? Date.parse(session.lastTs) : stat.mtimeMs;
+      out.push({ dirName: d.name, filePath: fp, stat, session, lastMs });
+    }
+  }
+  return out;
+}
+
+function getWindow5hUsageStats() {
+  const cutoff = Date.now() - HUSTLER_WINDOW_MS;
+  const sessions = listLocalSessions({ minMtimeMs: cutoff });
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  const contributing = new Set();
+  for (const item of sessions) {
+    for (const ev of item.session.usageEvents || []) {
+      if (ev.atMs >= cutoff) {
+        inputTokens += (ev.baseInputTokens || 0) + (ev.cacheCreationInputTokens || 0);
+        outputTokens += ev.outputTokens || 0;
+        cacheReadTokens += ev.cacheReadInputTokens || 0;
+        contributing.add(`${item.dirName}:${item.session.sessionId}`);
+      }
+    }
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    totalTokens: inputTokens + outputTokens,
+    sessions: contributing.size,
+  };
+}
+
+function getLatestLocalActivityMs() {
+  let latest = 0;
+  for (const item of listLocalSessions()) {
+    if (item.lastMs && item.lastMs > latest) latest = item.lastMs;
+  }
+  return latest;
+}
+
+function loadHustlerProviderConfig() {
+  const base = loadSecretaryConfig();
+  const provider = process.env.HUSTLER_PROVIDER || 'auto';
+  const model = process.env.HUSTLER_MODEL || base.model || DEFAULT_SECRETARY_MODEL;
+  let mode;
+  if (provider === 'off') mode = 'off';
+  else if (provider === 'api') mode = base.apiKey ? 'api' : 'off';
+  else if (provider === 'cli') mode = base.cli ? 'cli' : 'off';
+  else mode = base.cli ? 'cli' : (base.apiKey ? 'api' : 'off'); // auto: CLI 優先
+  return { mode, apiKey: base.apiKey, model, cli: base.cli };
+}
+
+async function runClaudeApiText({ apiKey, model, system, prompt, maxTokens = 2200 }) {
+  const ar = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!ar.ok) throw new Error(`Anthropic API ${ar.status}: ${(await ar.text()).slice(0, 200)}`);
+  const j = await ar.json();
+  return (j.content || [])
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n')
+    .trim();
+}
+
+function pickExplorerContext(topic) {
+  const trimmed = String(topic || '').trim();
+  if (!trimmed) return [];
+  const reports = loadExplorerState().reports || {};
+  const hits = [];
+  for (const [name, info] of Object.entries(reports)) {
+    if (!info || !info.report) continue;
+    if (name === trimmed || name.includes(trimmed) || trimmed.includes(name)) {
+      hits.push({ topic: name, report: info.report, at: info.at || 0 });
+    }
+  }
+  hits.sort((a, b) => b.at - a.at);
+  return hits.slice(0, 2);
+}
+
+function hustlerSystemPrompt() {
+  const now = new Date();
+  return `あなたはユーザーの遊休時間を使って収益化可能な成果物を作る、日本語の実務型「商人(内職)エージェント」です。現在時刻は ${localDateStr(now)} ${hm(now)} です。
+
+方針:
+- すぐ再利用・販売・投稿できる成果物を優先する。
+- 内容は具体的で、アウトラインだけで終わらせず最低限の本文まで書く。
+- 情報が不足する場合は、与えられた文脈から妥当な前提を置いて前へ進める。ただし断定しすぎない。
+- 前置きは短く、成果物本体を Markdown でそのまま出力する。
+- 常に日本語で出力する。`;
+}
+
+function buildHustlerJobPrompt(job) {
+  const subject = (job.topic || job.prompt || '').trim();
+  const explorerBits = job.type === 'article_draft' ? pickExplorerContext(subject) : [];
+  const explorerText = explorerBits.length
+    ? `\n\n参考に使える保存済みの探検家レポート:\n${explorerBits.map((x) => `### ${x.topic}\n${x.report}`).join('\n\n')}`
+    : '';
+  if (job.type === 'article_draft') {
+    return {
+      prompt: `テーマ: ${subject || '未指定'}
+
+Zenn / 技術ブログ向けの Markdown 記事ドラフトを作ってください。必ず次の順番で構成してください。
+
+# タイトル案
+- 3案
+
+# 見出し構成
+- H2/H3 レベルで、読み進めやすい構成
+
+# 本文
+- そのまま下書きとして編集できる分量まで書く
+- 具体例、背景、読者が得るメリット、最後のまとめまで含める
+- 読者は実務で使える知見を求めるエンジニアや個人開発者を想定する
+
+トーン:
+- 実務的で読みやすい
+- 誇張しすぎない
+- 箇条書きに逃げず、本文は段落としてしっかり書く${explorerText}`,
+      useResearch: false,
+    };
+  }
+  if (job.type === 'sns_pack') {
+    return {
+      prompt: `題材: ${subject || '未指定'}
+
+次の2点を Markdown で作成してください。
+
+# X投稿案
+- 5本
+- それぞれ切り口を変える
+- フック、要点、CTA を短く入れる
+- 必要なら絵文字は最小限
+
+# note紹介文
+- 記事や企画の導入として使える 300〜500字程度
+- 読み手が続きを見たくなる流れにする
+
+入力が記事本文の場合は要約して活用し、トピックだけの場合は投稿向けの切り口を自分で補ってください。`,
+      useResearch: false,
+    };
+  }
+  if (job.type === 'idea_research') {
+    return {
+      prompt: `テーマ: ${subject || '未指定'}
+
+収益化ネタのリサーチ結果を Markdown でまとめてください。必ず次の見出しを使ってください。
+
+## 需要
+## 競合
+## 狙い目の切り口
+## まずやること
+
+- 需要は誰のどんな悩みかまで具体化する
+- 競合は強み/弱みも短く整理する
+- 切り口は差別化案を3つ以上
+- 次アクションは今日から着手できる粒度にする`,
+      useResearch: true,
+    };
+  }
+  return {
+    prompt: subject || '収益化につながる日本語の Markdown 成果物を1つ作成してください。',
+    useResearch: false,
+  };
+}
+
+function outputFrontMatter(job, createdAt) {
+  const lines = [
+    '---',
+    `type: ${job.type}`,
+    `topic: ${JSON.stringify(job.topic || job.prompt || '')}`,
+    `createdAt: ${createdAt}`,
+    `jobId: ${job.id}`,
+    '---',
+    '',
+  ];
+  return lines.join('\n');
+}
+
+function saveHustlerOutput(job, content) {
+  ensureHustlerStorage();
+  const outputId = makeId('out');
+  const createdAt = new Date().toISOString();
+  const body = outputFrontMatter(job, createdAt) + String(content || '').trim() + '\n';
+  fs.writeFileSync(path.join(HUSTLER_OUTPUTS_DIR, `${outputId}.md`), body);
+  return { outputId, createdAt };
+}
+
+function parseOutputFile(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  let meta = {};
+  let body = raw;
+  const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (m) {
+    body = raw.slice(m[0].length);
+    for (const line of m[1].split('\n')) {
+      const idx = line.indexOf(':');
+      if (idx < 0) continue;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      meta[key] = value.startsWith('"') ? JSON.parse(value) : value;
+    }
+  }
+  return { meta, body };
+}
+
+function listHustlerOutputs() {
+  ensureHustlerStorage();
+  let files = [];
+  try { files = fs.readdirSync(HUSTLER_OUTPUTS_DIR).filter((f) => f.endsWith('.md')); } catch { return []; }
+  const out = [];
+  for (const file of files) {
+    const filePath = path.join(HUSTLER_OUTPUTS_DIR, file);
+    try {
+      const { meta, body } = parseOutputFile(filePath);
+      out.push({
+        id: file.replace(/\.md$/, ''),
+        type: meta.type || 'custom',
+        topic: meta.topic || '',
+        createdAt: meta.createdAt || new Date(fs.statSync(filePath).mtimeMs).toISOString(),
+        jobId: meta.jobId || null,
+        preview: body.trim().split('\n').find(Boolean)?.slice(0, 120) || '',
+      });
+    } catch { /* ignore broken file */ }
+  }
+  out.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  return out;
+}
+
+function getHustlerOutput(id) {
+  if (!/^[a-z0-9-]+$/i.test(id || '')) return null;
+  const filePath = path.join(HUSTLER_OUTPUTS_DIR, `${id}.md`);
+  if (!fs.existsSync(filePath)) return null;
+  const { meta, body } = parseOutputFile(filePath);
+  return {
+    id,
+    type: meta.type || 'custom',
+    topic: meta.topic || '',
+    createdAt: meta.createdAt || null,
+    jobId: meta.jobId || null,
+    body,
+  };
+}
+
+function summarizeRevenueByMonth(items) {
+  const map = new Map();
+  for (const item of items) {
+    const month = String(item.date || '').slice(0, 7);
+    if (!month) continue;
+    map.set(month, (map.get(month) || 0) + (Number(item.amount) || 0));
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, total]) => ({ month, total }));
+}
+
+function getHustlerStatus() {
+  const config = loadHustlerConfig();
+  const window5h = getWindow5hUsageStats();
+  const lastActivityMs = getLatestLocalActivityMs();
+  const idle = !lastActivityMs || (Date.now() - lastActivityMs) >= config.idleMinutes * 60 * 1000;
+  const withinHours = isWithinActiveHours(config.activeHours);
+  const jobs = loadHustlerJobs();
+  const today = localDateStr();
+  const runsToday = jobs.filter((j) => j.startedAt && String(j.startedAt).slice(0, 10) === today).length;
+  const pendingJobs = jobs.filter((j) => j.status === 'pending').length;
+  const lastRun = jobs
+    .map((j) => j.finishedAt || j.startedAt || '')
+    .filter(Boolean)
+    .sort()
+    .pop() || null;
+  const provider = loadHustlerProviderConfig();
+  const canRun = !!(
+    config.enabled &&
+    pendingJobs > 0 &&
+    !hustlerRunning &&
+    !explorerRunning &&
+    provider.mode !== 'off' &&
+    withinHours &&
+    idle &&
+    (window5h.totalTokens + HUSTLER_TOKEN_HEADROOM) < config.tokenBudget5h &&
+    runsToday < config.maxRunsPerDay
+  );
+  return {
+    enabled: config.enabled,
+    activeHours: config.activeHours,
+    window5h,
+    tokenBudget5h: config.tokenBudget5h,
+    idleMinutes: config.idleMinutes,
+    idle,
+    withinHours,
+    runsToday,
+    maxRunsPerDay: config.maxRunsPerDay,
+    canRun,
+    pendingJobs,
+    lastRun,
+    running: hustlerRunning,
+    mode: provider.mode,
+  };
+}
+
+async function executeHustlerJob(jobId) {
+  if (hustlerRunning) throw new Error('別の内職ジョブを実行中です。');
+  if (explorerRunning) throw new Error('探検家が調査中のため、少し待ってから実行してください。');
+  const cfg = loadHustlerProviderConfig();
+  if (cfg.mode === 'off') {
+    throw new Error('商人の実行には Claude CLI か Anthropic API キーが必要です。');
+  }
+
+  const jobs = loadHustlerJobs();
+  const idx = jobs.findIndex((j) => j.id === jobId);
+  if (idx < 0) throw new Error('ジョブが見つかりません');
+  if (jobs[idx].status === 'running') throw new Error('このジョブはすでに実行中です');
+
+  jobs[idx] = {
+    ...jobs[idx],
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+  };
+  saveHustlerJobs(jobs);
+
+  hustlerRunning = true;
+  try {
+    const job = jobs[idx];
+    const task = buildHustlerJobPrompt(job);
+    let content;
+    if (task.useResearch && cfg.mode === 'api') {
+      content = await runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt: task.prompt });
+    } else if (task.useResearch && cfg.mode === 'cli') {
+      content = await runResearchCli({ cli: cfg.cli, model: cfg.model, prompt: task.prompt });
+    } else if (cfg.mode === 'cli') {
+      content = await runClaudeCli({ cli: cfg.cli, model: cfg.model, system: hustlerSystemPrompt(), prompt: task.prompt });
+    } else {
+      content = await runClaudeApiText({ apiKey: cfg.apiKey, model: cfg.model, system: hustlerSystemPrompt(), prompt: task.prompt });
+    }
+    const saved = saveHustlerOutput(job, content || '(成果物が空でした)');
+    const nextJobs = loadHustlerJobs();
+    const nextIdx = nextJobs.findIndex((j) => j.id === job.id);
+    if (nextIdx >= 0) {
+      nextJobs[nextIdx] = {
+        ...nextJobs[nextIdx],
+        status: 'done',
+        finishedAt: saved.createdAt,
+        outputId: saved.outputId,
+        error: null,
+      };
+      saveHustlerJobs(nextJobs);
+      return nextJobs[nextIdx];
+    }
+    return { ...job, status: 'done', finishedAt: saved.createdAt, outputId: saved.outputId };
+  } catch (e) {
+    const nextJobs = loadHustlerJobs();
+    const nextIdx = nextJobs.findIndex((j) => j.id === jobId);
+    if (nextIdx >= 0) {
+      nextJobs[nextIdx] = {
+        ...nextJobs[nextIdx],
+        status: 'error',
+        finishedAt: new Date().toISOString(),
+        error: String(e.message || e).slice(0, 500),
+      };
+      saveHustlerJobs(nextJobs);
+    }
+    throw e;
+  } finally {
+    hustlerRunning = false;
+  }
+}
+
+async function maybeRunHustlerScheduled() {
+  const status = getHustlerStatus();
+  if (!status.canRun) return null;
+  const jobs = loadHustlerJobs().filter((j) => j.status === 'pending');
+  if (!jobs.length) return null;
+  jobs.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  console.log(`[hustler] 定期実行を開始: ${jobs[0].id} (${jobs[0].type})`);
+  return executeHustlerJob(jobs[0].id);
+}
+
 function researchPrompt(topic) {
   return `あなたは「${topic}」分野を追う調査担当です。Web 検索を複数回おこない、直近1〜2週間の最新情報を十分に調べたうえで、日本語の Markdown レポートにまとめてください。
 
@@ -589,7 +1191,7 @@ async function doResearch(topic) {
 
 /** 直近の「月曜9:00」を跨いでいたら、保存トピックを順次調査する */
 async function checkWeekly() {
-  if (explorerRunning) return;
+  if (explorerRunning || hustlerRunning) return;
   const st = loadExplorerState();
   if (!st.topics.length) return;
   const now = new Date();
@@ -1318,7 +1920,7 @@ const server = http.createServer((req, res) => {
       .then(async (body) => {
         const topic = (typeof body.topic === 'string' ? body.topic : '').trim().slice(0, 80);
         if (!topic) throw new Error('トピックを入力してください');
-        if (explorerRunning) { sendJson(res, 200, { error: '別の調査を実行中です。少し待ってから再度お試しください。', running: true }); return; }
+        if (explorerRunning || hustlerRunning) { sendJson(res, 200, { error: '別の調査/内職を実行中です。少し待ってから再度お試しください。', running: true }); return; }
         explorerRunning = true;
         try {
           sendJson(res, 200, await doResearch(topic));
@@ -1348,6 +1950,123 @@ const server = http.createServer((req, res) => {
       })
       .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;
+  }
+
+  /* ── 商人(内職)──────────────────────────── */
+  if (url.pathname === '/api/hustler/status') {
+    sendJson(res, 200, getHustlerStatus());
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/hustler/config') {
+    readJsonBody(req)
+      .then((body) => {
+        const config = saveHustlerConfig(body || {});
+        sendJson(res, 200, { ok: true, config, status: getHustlerStatus() });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (url.pathname === '/api/hustler/jobs') {
+    if (req.method === 'GET') {
+      const jobs = loadHustlerJobs().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      sendJson(res, 200, { jobs });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(body.type) ? body.type : 'custom';
+          const topic = typeof body.topic === 'string' ? body.topic.trim().slice(0, 500) : '';
+          const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 12000) : '';
+          if (type === 'custom' ? !prompt : !topic) throw new Error(type === 'custom' ? 'プロンプトを入力してください' : 'トピックを入力してください');
+          const jobs = loadHustlerJobs();
+          const job = normalizeHustlerJob({
+            id: makeId('job'),
+            type,
+            topic,
+            prompt,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+          });
+          jobs.push(job);
+          saveHustlerJobs(jobs);
+          sendJson(res, 200, { ok: true, job });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
+  }
+
+  if (req.method === 'DELETE' && /^\/api\/hustler\/jobs\/[^/]+$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const jobs = loadHustlerJobs();
+    const idx = jobs.findIndex((j) => j.id === id);
+    if (idx < 0) { sendJson(res, 404, { error: 'ジョブが見つかりません' }); return; }
+    if (jobs[idx].status === 'running') { sendJson(res, 409, { error: '実行中ジョブは削除できません' }); return; }
+    const removed = jobs.splice(idx, 1)[0];
+    saveHustlerJobs(jobs);
+    sendJson(res, 200, { ok: true, job: removed });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/hustler/run') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const jobs = loadHustlerJobs();
+        const target = body && body.id
+          ? jobs.find((j) => j.id === String(body.id))
+          : jobs
+            .filter((j) => j.status === 'pending')
+            .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))[0];
+        if (!target) throw new Error('実行できるジョブがありません');
+        sendJson(res, 200, { ok: true, job: await executeHustlerJob(target.id) });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (url.pathname === '/api/hustler/outputs') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { outputs: listHustlerOutputs() });
+      return;
+    }
+  }
+
+  if (req.method === 'GET' && /^\/api\/hustler\/outputs\/[^/]+$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const output = getHustlerOutput(id);
+    if (!output) { sendJson(res, 404, { error: '成果物が見つかりません' }); return; }
+    sendJson(res, 200, output);
+    return;
+  }
+
+  if (url.pathname === '/api/hustler/revenue') {
+    if (req.method === 'GET') {
+      const items = loadHustlerRevenue().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      sendJson(res, 200, { items, monthly: summarizeRevenueByMonth(items) });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const amount = Number(body.amount);
+          if (!Number.isFinite(amount)) throw new Error('金額を入力してください');
+          const item = {
+            id: makeId('rev'),
+            date: typeof body.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : localDateStr(),
+            amount,
+            memo: typeof body.memo === 'string' ? body.memo.trim().slice(0, 200) : '',
+          };
+          const items = loadHustlerRevenue();
+          items.push(item);
+          saveHustlerRevenue(items);
+          sendJson(res, 200, { ok: true, item, monthly: summarizeRevenueByMonth(items) });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
   }
 
   if (url.pathname === '/api/data') {
@@ -1381,6 +2100,9 @@ const server = http.createServer((req, res) => {
   });
 });
 
+ensureHustlerStorage();
+resetStaleHustlerJobs();
+
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
     console.error(`エラー: ポート ${PORT} は既に使用中です。`);
@@ -1406,3 +2128,7 @@ setInterval(refreshPeers, 5000);
 const runWeekly = () => checkWeekly().catch((e) => console.error('[explorer] 週次エラー:', e.message));
 runWeekly();
 setInterval(runWeekly, 30 * 60 * 1000);
+
+const runHustler = () => maybeRunHustlerScheduled().catch((e) => console.error('[hustler] 定期実行エラー:', e.message));
+runHustler();
+setInterval(runHustler, HUSTLER_CHECK_MS);

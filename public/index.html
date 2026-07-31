@@ -399,6 +399,88 @@
     border-radius: 50%; display: inline-block; animation: xspin .8s linear infinite;
   }
 
+  /* ── 商人(内職)──────────────────────── */
+  .hpanel { width: 470px; }
+  .hpanel .panel-head { position: relative; background: linear-gradient(135deg, #7b5223 0%, #176a57 100%); }
+  .htabs {
+    display: flex; gap: 8px; padding: 10px 14px 0; border-bottom: 1px solid #e8edf2;
+    background: rgba(255,255,255,.94);
+  }
+  .htab {
+    border: none; border-radius: 11px 11px 0 0; padding: 10px 14px 9px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 800; color: #617184; background: #eef3f7;
+  }
+  .htab.active { background: linear-gradient(135deg, #7b5223, #176a57); color: #fff; }
+  .hbody { flex: 1; overflow-y: auto; padding: 14px 16px 20px; }
+  .hcard {
+    background: #fff; border: 1px solid #e4eaf1; border-radius: 14px; padding: 12px 13px; margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(40,60,90,.05);
+  }
+  .hgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .hlabel { font-size: 11px; font-weight: 800; color: var(--gray-txt); letter-spacing: .06em; margin-bottom: 5px; }
+  .hinput, .hselect, .htextarea {
+    width: 100%; font-family: inherit; font-size: 13px; color: var(--navy); background: #fff;
+    border: 1px solid #d5dde6; border-radius: 11px; padding: 9px 11px;
+  }
+  .htextarea { min-height: 88px; resize: vertical; }
+  .hbtn {
+    border: none; border-radius: 11px; padding: 10px 14px; cursor: pointer; font-family: inherit;
+    font-size: 12.5px; font-weight: 800; color: #fff; background: linear-gradient(135deg, #7b5223, #176a57);
+  }
+  .hbtn.alt { background: #edf2f7; color: #2c4157; }
+  .hbtn.warn { background: #c0392b; }
+  .hbtn:disabled { opacity: .45; cursor: default; }
+  .htoggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .htoggle input { width: 18px; height: 18px; accent-color: #176a57; }
+  .hmeta { font-size: 12px; line-height: 1.75; color: #415264; }
+  .hmeta b { color: #1f2c38; }
+  .hbar { margin-top: 10px; height: 12px; border-radius: 999px; background: #e9eff4; overflow: hidden; }
+  .hbar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #f0b748, #1faa84); }
+  .hmini { font-size: 10.5px; color: var(--gray-txt); margin-top: 6px; }
+  .hjob {
+    border: 1px solid #e4eaf1; border-radius: 12px; padding: 10px 11px; background: #fbfcfe; margin-top: 8px;
+  }
+  .hjob .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .hjob .ttl { font-size: 13px; font-weight: 700; line-height: 1.45; color: #223242; }
+  .hjob .sub { font-size: 11px; color: #7b8794; margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  .hjob .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .hchip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; background: #edf2f7; color: #506070;
+  }
+  .hchip.on { background: #dbf7ee; color: #176a57; }
+  .hchip.err { background: #fdecec; color: #c0392b; }
+  .hsplit { display: grid; grid-template-columns: 170px 1fr; gap: 12px; min-height: 420px; }
+  .hout-list { display: flex; flex-direction: column; gap: 8px; }
+  .hout-item {
+    border: 1px solid #e4eaf1; border-radius: 12px; padding: 10px; cursor: pointer; background: #fff;
+  }
+  .hout-item.active { border-color: #176a57; background: #eef8f5; }
+  .hout-item .ttl { font-size: 12px; font-weight: 800; color: #223242; line-height: 1.45; }
+  .hout-item .meta { font-size: 10.5px; color: #7b8794; margin-top: 4px; }
+  .hout-view {
+    border: 1px solid #e4eaf1; border-radius: 14px; background: #fff; padding: 14px 15px;
+    overflow-y: auto;
+  }
+  .hout-view h4 {
+    font-size: 14px; margin: 16px 0 6px; color: #176a57;
+    border-bottom: 1px solid #e3ece9; padding-bottom: 3px;
+  }
+  .hout-view h4:first-child { margin-top: 2px; }
+  .hout-view ul { margin: 4px 0; padding-left: 20px; }
+  .hout-view li, .hout-view p { font-size: 13px; line-height: 1.75; color: #2b3540; }
+  .hout-view a { color: #176a57; word-break: break-all; }
+  .hgraph svg { display: block; width: 100%; height: auto; }
+  .hrev {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+    border-top: 1px solid #eef2f6; padding: 9px 0;
+  }
+  .hrev:first-child { border-top: none; padding-top: 0; }
+  .hrev .memo { font-size: 12.5px; color: #223242; line-height: 1.45; }
+  .hrev .sub { font-size: 10.5px; color: #7b8794; margin-top: 3px; }
+  .hrev .amt { font-size: 12.5px; font-weight: 800; color: #176a57; white-space: nowrap; }
+
   /* ── パネルのリサイズハンドル(左端ドラッグで幅変更)──────── */
   .panel-resize {
     position: absolute; left: 0; top: 0; width: 10px; height: 100%;
@@ -467,11 +549,12 @@
     .zoom-ctrl .zlevel { min-width: 34px; }
 
     /* パネルは全画面、リサイズ無効 */
-    .panel, .gpanel, .spanel, .xpanel { width: 100%; max-width: 100%; }
+    .panel, .gpanel, .spanel, .xpanel, .hpanel { width: 100%; max-width: 100%; }
     .panel-resize { display: none; }
 
     /* iOS のフォーカス時ズームを防ぐ(入力は16px以上に) */
-    .sform textarea, .xform input, .gadd input { font-size: 16px; }
+    .sform textarea, .xform input, .gadd input, .hinput, .hselect, .htextarea { font-size: 16px; }
+    .hsplit { grid-template-columns: 1fr; min-height: 0; }
 
     /* ノッチ・ブラウザ上部バーを避ける(セーフエリア対応)*/
     .panel-head { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
@@ -582,6 +665,22 @@
     <div class="xbody" id="x-body"></div>
   </div>
 
+  <div class="panel hpanel" id="hpanel">
+    <div class="panel-resize" id="h-resize"></div>
+    <div class="panel-head">
+      <button class="close" onclick="closeHPanel()">✕</button>
+      <div class="pj">商人・内職</div>
+      <div class="pth" id="h-sub">遊休時間に成果物を自動生成</div>
+      <div class="badges" id="h-badges"></div>
+    </div>
+    <div class="htabs">
+      <button class="htab active" id="h-tab-work" onclick="setHTab('work')">仕事</button>
+      <button class="htab" id="h-tab-outputs" onclick="setHTab('outputs')">成果物</button>
+      <button class="htab" id="h-tab-revenue" onclick="setHTab('revenue')">収益</button>
+    </div>
+    <div class="hbody" id="h-body"></div>
+  </div>
+
   <!-- ミニ表示(PiP)の中身。通常は非表示、PiP ウィンドウに移して使う -->
   <div id="mini" class="mini">
     <div class="mini-screen" data-screen="list">
@@ -611,6 +710,16 @@ const $ = (id) => document.getElementById(id);
 
 let DATA = null;
 let selectedId = null;
+let HSTATUS = null;
+let HJOBS = [];
+let HOUTPUTS = [];
+let HREVENUE = { items: [], monthly: [] };
+let hUnread = false;
+let hBusy = false;
+let hTab = 'work';
+let hCurrentOutputId = null;
+let hOutputCache = {};
+let hPollAt = 0;
 
 /* ══════════ ユーティリティ ══════════ */
 function el(name, attrs = {}, children = []) {
@@ -1124,6 +1233,52 @@ function explorerStation(unread) {
   return g;
 }
 
+/* 商人(内職)。unread=true で新着成果物バッジ */
+function hustlerStation(unread) {
+  const g = el('g', { class: 'node-g' });
+  g.appendChild(el('path', { d: tilePath(72, 36), fill: '#f4efdf', stroke: '#fff', 'stroke-width': 2.5 }));
+  g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#d3b15f', 'stroke-width': 2.5, class: 'pulse-ring' }));
+
+  const pm = person({ pose: 'work', suit: '#8a5e24', shirt: '#f7ecd4', hair: '#2a2431', anim: 'bob' });
+  pm.setAttribute('transform', 'translate(10,-30) scale(1.06)');
+  g.appendChild(pm);
+
+  g.appendChild(isoBox(0, -4, 58, 32, 24, '#faf4e6', '#decf9d', '#ccb97c'));
+  g.appendChild(isoBox(-20, -24, 10, 10, 9, '#c88e3a', '#9f6b21', '#b47c2d'));
+  const coin = el('g', { transform: 'translate(10,-30)' });
+  coin.appendChild(el('circle', { cx: 0, cy: 0, r: 7, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': 1.5, class: 'blink' }));
+  const cTxt = el('text', { x: 0, y: 4, 'text-anchor': 'middle', fill: '#7b5223', 'font-size': 10, 'font-weight': 800 });
+  txt(cTxt, '¥'); coin.appendChild(cTxt);
+  g.appendChild(coin);
+  g.appendChild(el('path', { d: 'M-8,-22 l13,-6.5 l9,4.5 l-13,6.5 Z', fill: '#f2e1b8' }));
+
+  const bub = el('g', { class: 'bob', transform: 'translate(28,-84)' });
+  bub.appendChild(el('rect', { x: -17, y: -16, width: 34, height: 27, rx: 10, fill: '#fff', stroke: '#d3b15f', 'stroke-width': 2, filter: 'url(#soft)' }));
+  bub.appendChild(el('path', { d: 'M-7,9 l7,9 l7,-9 Z', fill: '#fff' }));
+  const bt = el('text', { x: 0, y: 3, 'text-anchor': 'middle', 'font-size': 15 });
+  txt(bt, '💰'); bub.appendChild(bt);
+  g.appendChild(bub);
+
+  if (unread) {
+    const bd = el('g', { transform: 'translate(46,-90)' });
+    bd.appendChild(el('circle', { cx: 0, cy: 0, r: 9, fill: '#e5484d', stroke: '#fff', 'stroke-width': 2, class: 'blink' }));
+    const bx = el('text', { x: 0, y: 4, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12, 'font-weight': 800 });
+    txt(bx, '!'); bd.appendChild(bx);
+    g.appendChild(bd);
+  }
+
+  const plate = el('g', { transform: 'translate(0,50)' });
+  plate.appendChild(el('rect', { x: -58, y: -14, width: 116, height: 31, rx: 9, fill: '#5f5120', filter: 'url(#soft)' }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, '商人・内職');
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#eadfa4', 'font-size': 9.5 });
+  txt(t2, 'クリックで仕込み 💰');
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
 /* ══════════ フロア(プレート) ══════════ */
 function buildDefs() {
   const defs = el('defs');
@@ -1297,6 +1452,15 @@ function render() {
     items.push({ y: pt.y + 1e4, el: g });
   }
 
+  // 商人(常に最前面・クリックで内職パネル)
+  {
+    const pt = iso(.88, .86);
+    const g = hustlerStation(hUnread);
+    g.setAttribute('transform', `translate(${pt.x},${pt.y})`);
+    g.addEventListener('pointerdown', openHPanel);
+    items.push({ y: pt.y + 1e4, el: g });
+  }
+
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
 
@@ -1344,7 +1508,7 @@ function openPanel(id) {
   selectedId = id;
   const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
   if (!p) return;
-  closeSPanel(); closeXPanel();
+  closeSPanel(); closeXPanel(); closeHPanel();
   fillPanel(p);
   $('panel').classList.add('open');
 }
@@ -1442,6 +1606,7 @@ async function tick() {
   try {
     const r = await fetch('/api/data');
     DATA = await r.json();
+    maybePollHustler();
     // データが変わった時だけ再描画(アニメーションのリセットとクリック競合を防ぐ)。
     // 経過時間表示の更新のため60秒ごとには必ず描画する。
     const key = JSON.stringify(DATA.projects);
@@ -1461,7 +1626,7 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
 
 /* ══════════ ミニ表示(Picture-in-Picture)══════════
@@ -1816,7 +1981,7 @@ async function loadXStatus() {
 }
 
 function openXPanel() {
-  closePanel(); closeGPanel(); closeSPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeHPanel();
   $('xpanel').classList.add('open');
   localStorage.setItem('xSeenAt', String(Date.now())); // 開いたら既読
   if (xUnread) { xUnread = false; forceRerender(); }
@@ -2040,6 +2205,413 @@ function mdToHtml(md) {
 // 起動時に一度だけ状態を取得し、未読バッジを反映
 loadXStatus().then(() => { xUnread = computeUnread(); if (xUnread) forceRerender(); });
 
+/* ══════════ 商人(内職)══════════ */
+function hTypeLabel(type) {
+  return {
+    article_draft: '記事ドラフト',
+    sns_pack: 'SNS導線',
+    idea_research: 'ネタ調査',
+    custom: '自由プロンプト',
+  }[type] || type;
+}
+function hStatusLabel(status) {
+  return {
+    pending: '待機中',
+    running: '実行中',
+    done: '完了',
+    error: 'エラー',
+  }[status] || status;
+}
+function fmtMoney(n) {
+  return Number(n || 0).toLocaleString('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 });
+}
+function nextHCheckText() {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setMinutes(Math.floor(d.getMinutes() / 10) * 10 + 10);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+async function hFetchJson(url, opts) {
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j && j.error)) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+function computeHUnread() {
+  let newest = 0;
+  for (const o of HOUTPUTS || []) newest = Math.max(newest, Date.parse(o.createdAt || 0) || 0);
+  return newest > Number(localStorage.getItem('hSeenAt') || 0);
+}
+function updateHUnreadFromOutputs() {
+  const prev = hUnread;
+  hUnread = computeHUnread();
+  if (prev !== hUnread) forceRerender();
+}
+async function loadHustlerData() {
+  const [status, jobs, outputs, revenue] = await Promise.all([
+    hFetchJson('/api/hustler/status'),
+    hFetchJson('/api/hustler/jobs'),
+    hFetchJson('/api/hustler/outputs'),
+    hFetchJson('/api/hustler/revenue'),
+  ]);
+  HSTATUS = status;
+  HJOBS = jobs.jobs || [];
+  HOUTPUTS = outputs.outputs || [];
+  HREVENUE = revenue || { items: [], monthly: [] };
+  if (hCurrentOutputId && !HOUTPUTS.some((o) => o.id === hCurrentOutputId)) hCurrentOutputId = null;
+  if (!hCurrentOutputId && HOUTPUTS.length) hCurrentOutputId = HOUTPUTS[0].id;
+  updateHUnreadFromOutputs();
+}
+function maybePollHustler(force) {
+  const now = Date.now();
+  if (!force && now - hPollAt < 15000) return;
+  hPollAt = now;
+  loadHustlerData()
+    .then(() => { if ($('hpanel').classList.contains('open')) renderHPanel(); })
+    .catch(() => { if ($('hpanel').classList.contains('open')) renderHPanel(); });
+}
+function renderHHeader() {
+  let label = '遊休時間に成果物を自動生成';
+  if (HSTATUS) {
+    if (HSTATUS.mode === 'cli') label = 'Claude(サブスク枠)で自動実行';
+    else if (HSTATUS.mode === 'api') label = 'Anthropic API で自動実行';
+    else label = '未設定 — CLI か API キーが必要';
+  }
+  $('h-sub').textContent = label + ' ・ 10分ごとにチェック';
+  if (!HSTATUS) {
+    $('h-badges').innerHTML = '<span class="badge">読込中</span>';
+    return;
+  }
+  $('h-badges').innerHTML = `
+    <span class="badge ${HSTATUS.enabled ? 'on' : ''}">${HSTATUS.enabled ? 'ON' : 'OFF'}</span>
+    <span class="badge ${HSTATUS.idle ? 'on' : ''}">${HSTATUS.idle ? '遊休中' : '使用中'}</span>
+    <span class="badge">${HSTATUS.pendingJobs} 件待機</span>
+    <span class="badge ${HSTATUS.running ? 'on' : ''}">${HSTATUS.running ? '実行中' : '待機中'}</span>`;
+}
+function setHTab(tab) {
+  hTab = tab;
+  renderHPanel();
+}
+function openHPanel() {
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel();
+  $('hpanel').classList.add('open');
+  localStorage.setItem('hSeenAt', String(Date.now()));
+  if (hUnread) { hUnread = false; forceRerender(); }
+  renderHPanel();
+  maybePollHustler(true);
+}
+function closeHPanel() { $('hpanel').classList.remove('open'); }
+function renderHTabs() {
+  for (const tab of ['work', 'outputs', 'revenue']) {
+    $('h-tab-' + tab).classList.toggle('active', hTab === tab);
+  }
+}
+function renderHJobsSection(status) {
+  const jobs = HJOBS.filter((j) => j.status === status);
+  if (!jobs.length) return '';
+  return `
+    <div class="sec-title">${hStatusLabel(status)} (${jobs.length})</div>
+    ${jobs.map((j) => `
+      <div class="hjob">
+        <div class="top">
+          <div>
+            <div class="ttl">${esc(hTypeLabel(j.type))} ${j.topic || j.prompt ? '— ' + esc((j.topic || j.prompt).slice(0, 90)) : ''}</div>
+            <div class="sub">作成 ${fmtAt(Date.parse(j.createdAt))}${j.finishedAt ? ' ・ 完了 ' + fmtAt(Date.parse(j.finishedAt)) : ''}${j.error ? ' ・ ' + esc(j.error) : ''}</div>
+          </div>
+          <span class="hchip ${status === 'running' ? 'on' : status === 'error' ? 'err' : ''}">${esc(hStatusLabel(status))}</span>
+        </div>
+        <div class="acts">
+          ${status !== 'running' ? `<button class="hbtn" onclick="runHJob('${j.id}')">▶ 実行</button>` : ''}
+          ${j.outputId ? `<button class="hbtn alt" onclick="openHOutputFromJob('${j.outputId}')">成果物</button>` : ''}
+          ${status !== 'running' ? `<button class="hbtn warn" onclick="deleteHJob('${j.id}')">削除</button>` : ''}
+        </div>
+      </div>`).join('')}`;
+}
+function renderHWork() {
+  if (!HSTATUS) return '<div class="empty">商人の状態を取得できません</div>';
+  const pct = Math.max(0, Math.min(100, Math.round(((HSTATUS.window5h && HSTATUS.window5h.totalTokens) || 0) / Math.max(1, HSTATUS.tokenBudget5h) * 100)));
+  return `
+    <div class="hcard">
+      <form onsubmit="return saveHConfig(event)">
+        <div class="htoggle">
+          <div>
+            <div class="hlabel">自動内職</div>
+            <div class="hmeta">遊休時間だけ使って最古の待機ジョブを1件ずつ回します。</div>
+          </div>
+          <input type="checkbox" id="h-enabled" ${HSTATUS.enabled ? 'checked' : ''}>
+        </div>
+        <div class="hgrid" style="margin-top:10px">
+          <div><div class="hlabel">稼働時間帯</div><input class="hinput" id="h-hours" value="${esc(HSTATUS.activeHours || '22-8')}" placeholder="22-8,12-13"></div>
+          <div><div class="hlabel">遊休判定(分)</div><input class="hinput" id="h-idle" type="number" min="1" max="180" value="${esc(HSTATUS.idleMinutes)}"></div>
+          <div><div class="hlabel">5h予算(トークン)</div><input class="hinput" id="h-budget" type="number" min="10000" step="1000" value="${esc(HSTATUS.tokenBudget5h)}"></div>
+          <div><div class="hlabel">1日の最大実行回数</div><input class="hinput" id="h-max-runs" type="number" min="1" max="48" value="${esc(HSTATUS.maxRunsPerDay)}"></div>
+        </div>
+        <div class="hrow"><button class="hbtn" type="submit">設定を保存</button></div>
+      </form>
+    </div>
+
+    <div class="hcard">
+      <div class="hlabel">5時間ウィンドウ使用量</div>
+      <div class="hmeta"><b>${fmtNum(HSTATUS.window5h.totalTokens)}</b> / ${fmtNum(HSTATUS.tokenBudget5h)} tok ・ ${HSTATUS.window5h.sessions} セッション</div>
+      <div class="hbar"><i style="width:${pct}%"></i></div>
+      <div class="hmini">input(除cache_read) ${fmtNum(HSTATUS.window5h.inputTokens)} / output ${fmtNum(HSTATUS.window5h.outputTokens)} / cache_read参考 ${fmtNum(HSTATUS.window5h.cacheReadTokens || 0)} ・ 次回チェック ${nextHCheckText()}</div>
+      <div class="hrow">
+        <span class="hchip ${HSTATUS.idle ? 'on' : ''}">${HSTATUS.idle ? '遊休中' : '使用中'}</span>
+        <span class="hchip ${HSTATUS.withinHours ? 'on' : ''}">${HSTATUS.withinHours ? '稼働時間内' : '時間外'}</span>
+        <span class="hchip ${HSTATUS.canRun ? 'on' : ''}">${HSTATUS.canRun ? '自動実行可能' : '条件待ち'}</span>
+        <span class="hchip">今日 ${HSTATUS.runsToday}/${HSTATUS.maxRunsPerDay}</span>
+      </div>
+      <div class="hrow">
+        <button class="hbtn" onclick="runHJob()" ${hBusy ? 'disabled' : ''}>▶ 今すぐ実行</button>
+        ${HSTATUS.lastRun ? `<span class="hmini">最終実行 ${esc(fmtAt(Date.parse(HSTATUS.lastRun)))}</span>` : '<span class="hmini">まだ実行履歴はありません</span>'}
+      </div>
+    </div>
+
+    <div class="hcard">
+      <form onsubmit="return addHJob(event)">
+        <div class="hlabel">ジョブ追加</div>
+        <div class="hrow">
+          <select class="hselect" id="h-job-type" onchange="updateHJobHint()">
+            <option value="article_draft">記事ドラフト</option>
+            <option value="sns_pack">SNS導線</option>
+            <option value="idea_research">ネタ調査</option>
+            <option value="custom">自由プロンプト</option>
+          </select>
+          <button class="hbtn" type="submit">追加</button>
+        </div>
+        <div class="hlabel" style="margin-top:10px">トピック / プロンプト</div>
+        <textarea class="htextarea" id="h-job-text" placeholder="例: Claude CLIの遊休時間活用術"></textarea>
+      </form>
+    </div>
+
+    ${renderHJobsSection('pending')}
+    ${renderHJobsSection('running')}
+    ${renderHJobsSection('done')}
+    ${renderHJobsSection('error')}
+    ${!HJOBS.length ? '<div class="empty">ジョブはまだありません</div>' : ''}`;
+}
+function renderHOutputs() {
+  if (!HOUTPUTS.length) return '<div class="empty">成果物はまだありません</div>';
+  const selected = HOUTPUTS.find((o) => o.id === hCurrentOutputId) || HOUTPUTS[0];
+  const cached = selected ? hOutputCache[selected.id] : null;
+  return `
+    <div class="hsplit">
+      <div class="hout-list">
+        ${HOUTPUTS.map((o) => `
+          <div class="hout-item ${selected && selected.id === o.id ? 'active' : ''}" onclick="selectHOutput('${o.id}')">
+            <div class="ttl">${esc(o.topic || hTypeLabel(o.type))}</div>
+            <div class="meta">${esc(hTypeLabel(o.type))} ・ ${esc(fmtAt(Date.parse(o.createdAt)))}</div>
+          </div>`).join('')}
+      </div>
+      <div class="hout-view">
+        ${selected ? `
+          <div class="hrow" style="justify-content:space-between;margin-top:0">
+            <div>
+              <div class="hlabel">成果物</div>
+              <div class="hmeta"><b>${esc(selected.topic || hTypeLabel(selected.type))}</b><br>${esc(hTypeLabel(selected.type))} ・ ${esc(fmtAt(Date.parse(selected.createdAt)))}</div>
+            </div>
+            <button class="hbtn alt" onclick="copyHOutput()" ${cached ? '' : 'disabled'}>コピー</button>
+          </div>
+          <div style="margin-top:12px">${cached ? mdToHtml(cached.body || '') : '<div class="xspin"><i></i>成果物を読み込み中…</div>'}</div>` : '<div class="empty">成果物を選択してください</div>'}
+      </div>
+    </div>`;
+}
+function renderHRevenueGraph(monthly) {
+  if (!monthly.length) return '<div class="empty" style="padding:12px 0">収益記録はまだありません</div>';
+  const W = 360, H = 140;
+  const max = Math.max(1, ...monthly.map((m) => m.total));
+  const bw = Math.max(24, Math.floor((W - 20) / monthly.length) - 10);
+  const gap = Math.max(8, Math.floor((W - 20 - bw * monthly.length) / Math.max(1, monthly.length - 1)));
+  let bars = '', labels = '';
+  monthly.forEach((m, i) => {
+    const h = Math.max(4, Math.round((m.total / max) * 88));
+    const x = 10 + i * (bw + gap);
+    const y = 108 - h;
+    bars += `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="6" fill="url(#hg${i})"/>`;
+    bars += `<defs><linearGradient id="hg${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f0b748"/><stop offset="1" stop-color="#1faa84"/></linearGradient></defs>`;
+    labels += `<text x="${x + bw / 2}" y="126" font-size="10" text-anchor="middle" fill="#6e7f90">${esc(m.month.slice(5))}</text>`;
+  });
+  return `<div class="hgraph"><svg viewBox="0 0 ${W} ${H}">
+    <line x1="10" y1="108" x2="${W - 10}" y2="108" stroke="#d8e1ea" stroke-width="1"/>
+    ${bars}${labels}
+  </svg></div>`;
+}
+function renderHRevenue() {
+  const items = HREVENUE.items || [];
+  const monthly = HREVENUE.monthly || [];
+  return `
+    <div class="hcard">
+      <form onsubmit="return saveHRevenue(event)">
+        <div class="hgrid">
+          <div><div class="hlabel">日付</div><input class="hinput" id="h-rev-date" type="date" value="${todayStr()}"></div>
+          <div><div class="hlabel">金額</div><input class="hinput" id="h-rev-amount" type="number" step="1" min="0" placeholder="1000"></div>
+        </div>
+        <div class="hlabel" style="margin-top:10px">メモ</div>
+        <input class="hinput" id="h-rev-memo" maxlength="200" placeholder="例: note記事の売上">
+        <div class="hrow"><button class="hbtn" type="submit">記録する</button></div>
+      </form>
+    </div>
+    <div class="hcard">
+      <div class="hlabel">月次合計</div>
+      <div class="hmeta">${monthly.length ? monthly.map((m) => `${m.month}: ${fmtMoney(m.total)}`).join(' / ') : 'まだ記録がありません'}</div>
+      ${renderHRevenueGraph(monthly)}
+    </div>
+    <div class="hcard">
+      <div class="hlabel">記録一覧</div>
+      ${items.length ? items.map((it) => `
+        <div class="hrev">
+          <div><div class="memo">${esc(it.memo || '収益記録')}</div><div class="sub">${esc(it.date)}</div></div>
+          <div class="amt">${fmtMoney(it.amount)}</div>
+        </div>`).join('') : '<div class="empty" style="padding:12px 0">記録はまだありません</div>'}
+    </div>`;
+}
+function renderHPanel() {
+  renderHTabs();
+  renderHHeader();
+  const body = $('h-body');
+  if (!body) return;
+  if (!HSTATUS && !hBusy) {
+    body.innerHTML = '<div class="empty">商人の状態を読み込み中…</div>';
+    return;
+  }
+  if (hTab === 'outputs' && hCurrentOutputId && !hOutputCache[hCurrentOutputId]) loadHOutput(hCurrentOutputId);
+  body.innerHTML = hTab === 'work' ? renderHWork()
+    : hTab === 'outputs' ? renderHOutputs()
+      : renderHRevenue();
+  updateHJobHint();
+}
+function updateHJobHint() {
+  const type = $('h-job-type');
+  const box = $('h-job-text');
+  if (!type || !box) return;
+  const placeholders = {
+    article_draft: '例: Claude CLIの遊休時間活用術',
+    sns_pack: '例: 生成した記事ドラフトを宣伝する投稿導線',
+    idea_research: '例: AIエージェント監視ダッシュボードの収益化アイデア',
+    custom: '自由に実行したいプロンプトをそのまま入力',
+  };
+  box.placeholder = placeholders[type.value] || '';
+}
+async function saveHConfig(ev) {
+  ev.preventDefault();
+  try {
+    hBusy = true;
+    const j = await hFetchJson('/api/hustler/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: $('h-enabled').checked,
+        activeHours: $('h-hours').value.trim(),
+        idleMinutes: Number($('h-idle').value),
+        tokenBudget5h: Number($('h-budget').value),
+        maxRunsPerDay: Number($('h-max-runs').value),
+      }),
+    });
+    HSTATUS = j.status || HSTATUS;
+    renderHPanel();
+  } catch (e) {
+    alert('設定を保存できませんでした: ' + e.message);
+  } finally { hBusy = false; }
+  return false;
+}
+async function addHJob(ev) {
+  ev.preventDefault();
+  const type = $('h-job-type').value;
+  const text = $('h-job-text').value.trim();
+  if (!text) return false;
+  try {
+    hBusy = true;
+    await hFetchJson('/api/hustler/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(type === 'custom' ? { type, prompt: text } : { type, topic: text }),
+    });
+    $('h-job-text').value = '';
+    await loadHustlerData();
+    renderHPanel();
+  } catch (e) {
+    alert('ジョブを追加できませんでした: ' + e.message);
+  } finally { hBusy = false; }
+  return false;
+}
+async function deleteHJob(id) {
+  try {
+    hBusy = true;
+    await hFetchJson('/api/hustler/jobs/' + encodeURIComponent(id), { method: 'DELETE' });
+    await loadHustlerData();
+    renderHPanel();
+  } catch (e) {
+    alert('ジョブを削除できませんでした: ' + e.message);
+  } finally { hBusy = false; }
+}
+async function runHJob(id) {
+  try {
+    hBusy = true;
+    renderHPanel();
+    const j = await hFetchJson('/api/hustler/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(id ? { id } : {}),
+    });
+    await loadHustlerData();
+    if (j && j.job && j.job.outputId) {
+      hCurrentOutputId = j.job.outputId;
+      hTab = 'outputs';
+      await loadHOutput(hCurrentOutputId);
+    }
+    renderHPanel();
+  } catch (e) {
+    alert('ジョブを実行できませんでした: ' + e.message);
+  } finally { hBusy = false; renderHPanel(); }
+}
+async function loadHOutput(id) {
+  if (!id || hOutputCache[id]) return;
+  try {
+    hOutputCache[id] = await hFetchJson('/api/hustler/outputs/' + encodeURIComponent(id));
+  } catch (e) {
+    hOutputCache[id] = { body: '読み込みに失敗しました: ' + e.message };
+  }
+  if ($('hpanel').classList.contains('open') && hTab === 'outputs') renderHPanel();
+}
+function selectHOutput(id) {
+  hCurrentOutputId = id;
+  renderHPanel();
+  loadHOutput(id);
+}
+function openHOutputFromJob(id) {
+  hTab = 'outputs';
+  hCurrentOutputId = id;
+  renderHPanel();
+  loadHOutput(id);
+}
+async function copyHOutput() {
+  const out = hOutputCache[hCurrentOutputId];
+  if (!out || !out.body) return;
+  try { await navigator.clipboard.writeText(out.body); }
+  catch (e) { alert('コピーできませんでした: ' + e.message); }
+}
+async function saveHRevenue(ev) {
+  ev.preventDefault();
+  try {
+    hBusy = true;
+    await hFetchJson('/api/hustler/revenue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        date: $('h-rev-date').value || todayStr(),
+        amount: Number($('h-rev-amount').value),
+        memo: $('h-rev-memo').value.trim(),
+      }),
+    });
+    await loadHustlerData();
+    renderHPanel();
+  } catch (e) {
+    alert('収益を記録できませんでした: ' + e.message);
+  } finally { hBusy = false; }
+  return false;
+}
+maybePollHustler(true);
+
 /* ══════════ パネルのリサイズ(左端ドラッグ)══════════ */
 // 右ドッキングのパネルは幅を増やすと左へ広がる。localStorage に幅を保存・復元。
 function makeResizable(panelId, handle) {
@@ -2071,6 +2643,7 @@ function makeResizable(panelId, handle) {
 }
 makeResizable('spanel', $('s-resize'));
 makeResizable('xpanel', $('x-resize'));
+makeResizable('hpanel', $('h-resize'));
 
 /* ══════════ 時間帯で変わる外の空 ══════════ */
 // 空色のキーフレーム [時刻, [上, 中, 地平線]]。間を補間して滑らかに遷移。
@@ -2339,7 +2912,7 @@ function renderGoogle() {
   $('g-body').innerHTML = html;
 }
 
-function openGPanel() { closeSPanel(); closeXPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
+function openGPanel() { closeSPanel(); closeXPanel(); closeHPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
 function closeGPanel() { $('gpanel').classList.remove('open'); }
 
 async function toggleTask(listId, taskId, completed) {
@@ -2416,7 +2989,7 @@ async function loadSStatus() {
 }
 
 async function openSPanel() {
-  closePanel(); closeGPanel(); closeXPanel();
+  closePanel(); closeGPanel(); closeXPanel(); closeHPanel();
   $('spanel').classList.add('open');
   renderSChat();
   // 開くたびにサーバーから最新履歴を取得(他端末での会話を反映)。
