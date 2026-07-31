@@ -24,12 +24,23 @@ const HUSTLER_OUTPUTS_DIR = path.join(HUSTLER_DIR, 'outputs');
 const HUSTLER_JOBS_PATH = path.join(HUSTLER_DIR, 'jobs.json');
 const HUSTLER_REVENUE_PATH = path.join(HUSTLER_DIR, 'revenue.json');
 const HUSTLER_CONFIG_PATH = path.join(__dirname, 'hustler-config.json');
+const TRADER_DIR = path.join(DATA_DIR, 'trader');
+const TRADER_PRICES_PATH = path.join(TRADER_DIR, 'prices.jsonl');
+const TRADER_PORTFOLIO_PATH = path.join(TRADER_DIR, 'portfolio.json');
+const TRADER_CONFIG_PATH = path.join(__dirname, 'trader-config.json');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
 const HUSTLER_CHECK_MS = 10 * 60 * 1000;
 const HUSTLER_TOKEN_HEADROOM = 120000;
 const HUSTLER_JOB_TYPES = new Set(['article_draft', 'affiliate_article', 'sns_pack', 'idea_research', 'custom']);
 const HUSTLER_REVIEW_JOB_TYPES = new Set(['article_draft', 'affiliate_article']);
 const HUSTLER_PUBLISH_TARGETS = new Set(['zenn', 'generic', 'none']);
+const TRADER_ACTIONS = new Set(['buy', 'sell', 'hold']);
+const DEFAULT_TRADER_PATHS = {
+  dir: TRADER_DIR,
+  pricesPath: TRADER_PRICES_PATH,
+  portfolioPath: TRADER_PORTFOLIO_PATH,
+  configPath: TRADER_CONFIG_PATH,
+};
 
 /**
  * ピア(他のPCで動いている ai-agents-view)の一覧。
@@ -591,7 +602,17 @@ const DEFAULT_HUSTLER_CONFIG = {
   },
 };
 
+const DEFAULT_TRADER_CONFIG = {
+  enabled: false,
+  assets: ['bitcoin', 'ethereum'],
+  vsCurrency: 'jpy',
+  priceIntervalMin: 15,
+  analysisHour: 7,
+  startBalance: 100000,
+};
+
 let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+let traderRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 const HUSTLER_JOB_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved', 'rejected', 'published', 'error']);
 const HUSTLER_RESTARTABLE_STATUSES = new Set(['running', 'evaluating', 'revising']);
 const HUSTLER_UNFINISHED_TOPIC_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved']);
@@ -607,6 +628,133 @@ function ensureHustlerStorage() {
   if (!fs.existsSync(HUSTLER_CONFIG_PATH)) {
     fs.writeFileSync(HUSTLER_CONFIG_PATH, JSON.stringify(DEFAULT_HUSTLER_CONFIG, null, 2) + '\n');
   }
+}
+
+function traderPaths(paths = null) {
+  return { ...DEFAULT_TRADER_PATHS, ...(paths || {}) };
+}
+
+function sanitizeTraderAssetIds(items) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(items) ? items : []) {
+    const asset = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 60);
+    if (!asset || seen.has(asset)) continue;
+    seen.add(asset);
+    out.push(asset);
+    if (out.length >= 8) break;
+  }
+  return out.length ? out : DEFAULT_TRADER_CONFIG.assets.slice();
+}
+
+function sanitizeTraderConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const vsCurrency = typeof src.vsCurrency === 'string'
+    ? src.vsCurrency.trim().toLowerCase().replace(/[^a-z]/g, '').slice(0, 12)
+    : '';
+  return {
+    enabled: !!src.enabled,
+    assets: sanitizeTraderAssetIds(src.assets),
+    vsCurrency: vsCurrency || DEFAULT_TRADER_CONFIG.vsCurrency,
+    priceIntervalMin: Math.max(5, Math.min(24 * 60, Math.round(Number(src.priceIntervalMin) || DEFAULT_TRADER_CONFIG.priceIntervalMin))),
+    analysisHour: Math.max(0, Math.min(23, Math.round(Number(src.analysisHour) || DEFAULT_TRADER_CONFIG.analysisHour))),
+    startBalance: Math.max(1000, Math.min(1000000000, Math.round(Number(src.startBalance) || DEFAULT_TRADER_CONFIG.startBalance))),
+  };
+}
+
+function traderPriceField(vsCurrency) {
+  return String(vsCurrency || DEFAULT_TRADER_CONFIG.vsCurrency).toLowerCase();
+}
+
+function traderChangeField(vsCurrency) {
+  return `${traderPriceField(vsCurrency)}_24h_change`;
+}
+
+function makeDefaultTraderPortfolio(startBalance = DEFAULT_TRADER_CONFIG.startBalance) {
+  return {
+    cash: Math.max(0, Number(startBalance) || DEFAULT_TRADER_CONFIG.startBalance),
+    positions: {},
+    trades: [],
+    equityHistory: [],
+    lastAnalysis: null,
+  };
+}
+
+function sanitizeTraderSignalEntry(input, config) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const asset = String(src.asset || '').trim().toLowerCase();
+  if (!config.assets.includes(asset)) return null;
+  const action = TRADER_ACTIONS.has(src.action) ? src.action : 'hold';
+  const sizePct = Math.max(0, Math.min(30, Number(src.sizePct) || 0));
+  const confidence = Math.max(0, Math.min(1, Number(src.confidence) || 0));
+  return {
+    asset,
+    action,
+    sizePct: Math.round(sizePct * 100) / 100,
+    confidence: Math.round(confidence * 1000) / 1000,
+    reasoning: typeof src.reasoning === 'string' ? src.reasoning.trim().slice(0, 1200) : '',
+  };
+}
+
+function sanitizeTraderTrade(input, config) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const asset = String(src.asset || '').trim().toLowerCase();
+  return {
+    ts: typeof src.ts === 'string' ? src.ts : new Date().toISOString(),
+    asset: config.assets.includes(asset) ? asset : (config.assets[0] || 'bitcoin'),
+    side: TRADER_ACTIONS.has(src.side) ? src.side : 'hold',
+    qty: Math.max(0, Number(src.qty) || 0),
+    price: Math.max(0, Number(src.price) || 0),
+    reasoning: typeof src.reasoning === 'string' ? src.reasoning.slice(0, 1200) : '',
+    sizePct: Math.max(0, Math.min(30, Number(src.sizePct) || 0)),
+    confidence: Math.max(0, Math.min(1, Number(src.confidence) || 0)),
+  };
+}
+
+function sanitizeTraderPortfolio(input, config) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const clean = makeDefaultTraderPortfolio(config.startBalance);
+  clean.cash = Math.max(0, Number.isFinite(Number(src.cash)) ? Number(src.cash) : clean.cash);
+  clean.positions = {};
+  for (const asset of config.assets) {
+    const pos = src.positions && src.positions[asset];
+    if (!pos || typeof pos !== 'object') continue;
+    const qty = Math.max(0, Number(pos.qty) || 0);
+    const avgCost = Math.max(0, Number(pos.avgCost) || 0);
+    if (qty > 0) clean.positions[asset] = { qty, avgCost };
+  }
+  clean.trades = (Array.isArray(src.trades) ? src.trades : []).map((x) => sanitizeTraderTrade(x, config)).slice(-500);
+  clean.equityHistory = (Array.isArray(src.equityHistory) ? src.equityHistory : [])
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({
+      date: typeof x.date === 'string' ? x.date.slice(0, 10) : localDateStr(),
+      equity: Math.max(0, Number(x.equity) || 0),
+    }))
+    .slice(-365);
+  if (src.lastAnalysis && typeof src.lastAnalysis === 'object') {
+    clean.lastAnalysis = {
+      ts: typeof src.lastAnalysis.ts === 'string' ? src.lastAnalysis.ts : null,
+      marketNote: typeof src.lastAnalysis.marketNote === 'string' ? src.lastAnalysis.marketNote.slice(0, 2000) : '',
+      provider: typeof src.lastAnalysis.provider === 'string' ? src.lastAnalysis.provider.slice(0, 40) : '',
+      signals: (Array.isArray(src.lastAnalysis.signals) ? src.lastAnalysis.signals : [])
+        .map((x) => sanitizeTraderSignalEntry(x, config))
+        .filter(Boolean),
+    };
+  }
+  return clean;
+}
+
+function ensureTraderStorage(paths = null) {
+  const p = traderPaths(paths);
+  ensureDir(p.dir);
+  if (!fs.existsSync(p.pricesPath)) fs.writeFileSync(p.pricesPath, '');
+  if (!fs.existsSync(p.configPath)) {
+    fs.writeFileSync(p.configPath, JSON.stringify(DEFAULT_TRADER_CONFIG, null, 2) + '\n');
+  }
+  if (!fs.existsSync(p.portfolioPath)) {
+    fs.writeFileSync(p.portfolioPath, JSON.stringify(makeDefaultTraderPortfolio(DEFAULT_TRADER_CONFIG.startBalance), null, 2) + '\n');
+  }
+  return p;
 }
 
 function makeId(prefix) {
@@ -818,6 +966,160 @@ function saveHustlerConfig(config) {
   const clean = sanitizeHustlerConfig(config);
   fs.writeFileSync(HUSTLER_CONFIG_PATH, JSON.stringify(clean, null, 2) + '\n');
   return clean;
+}
+
+function loadTraderConfig(paths = null) {
+  const p = ensureTraderStorage(paths);
+  const stored = readJsonFileSafe(p.configPath, DEFAULT_TRADER_CONFIG);
+  return sanitizeTraderConfig({ ...DEFAULT_TRADER_CONFIG, ...stored });
+}
+
+function saveTraderConfig(config, paths = null) {
+  const p = ensureTraderStorage(paths);
+  const clean = sanitizeTraderConfig(config);
+  fs.writeFileSync(p.configPath, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function loadTraderPortfolio(paths = null, config = loadTraderConfig(paths)) {
+  const p = ensureTraderStorage(paths);
+  const stored = readJsonFileSafe(p.portfolioPath, makeDefaultTraderPortfolio(config.startBalance));
+  return sanitizeTraderPortfolio(stored, config);
+}
+
+function saveTraderPortfolio(portfolio, paths = null, config = loadTraderConfig(paths)) {
+  const p = ensureTraderStorage(paths);
+  const clean = sanitizeTraderPortfolio(portfolio, config);
+  fs.writeFileSync(p.portfolioPath, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function resetTraderPortfolio(paths = null, config = loadTraderConfig(paths)) {
+  return saveTraderPortfolio(makeDefaultTraderPortfolio(config.startBalance), paths, config);
+}
+
+function normalizeTraderPriceRecord(input, config) {
+  const vs = traderPriceField(config.vsCurrency);
+  const changeKey = traderChangeField(config.vsCurrency);
+  const src = (input && typeof input === 'object') ? input : {};
+  const prices = {};
+  for (const asset of config.assets) {
+    const raw = src.prices && src.prices[asset];
+    if (!raw || typeof raw !== 'object') continue;
+    const price = Number(raw[vs]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const item = { [vs]: price };
+    const change = Number(raw[changeKey]);
+    if (Number.isFinite(change)) item[changeKey] = change;
+    prices[asset] = item;
+  }
+  return {
+    ts: typeof src.ts === 'string' ? src.ts : new Date().toISOString(),
+    prices,
+  };
+}
+
+function loadTraderPriceHistory(paths = null, config = loadTraderConfig(paths)) {
+  const p = ensureTraderStorage(paths);
+  let text = '';
+  try { text = fs.readFileSync(p.pricesPath, 'utf8'); } catch { return []; }
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const row = normalizeTraderPriceRecord(JSON.parse(line), config);
+      if (Object.keys(row.prices).length) out.push(row);
+    } catch { /* ignore broken line */ }
+  }
+  return out.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+}
+
+function appendTraderPriceRecord(prices, paths = null, config = loadTraderConfig(paths), ts = new Date().toISOString()) {
+  const p = ensureTraderStorage(paths);
+  const record = normalizeTraderPriceRecord({ ts, prices }, config);
+  if (!Object.keys(record.prices).length) throw new Error('価格データが空です');
+  fs.appendFileSync(p.pricesPath, JSON.stringify(record) + '\n');
+  return record;
+}
+
+function buildTraderSeries(records, asset, vsCurrency) {
+  const field = traderPriceField(vsCurrency);
+  const changeKey = traderChangeField(vsCurrency);
+  return records
+    .map((row) => {
+      const atMs = Date.parse(row.ts);
+      const price = Number(row.prices && row.prices[asset] && row.prices[asset][field]);
+      const change24h = Number(row.prices && row.prices[asset] && row.prices[asset][changeKey]);
+      if (!Number.isFinite(atMs) || !Number.isFinite(price) || price <= 0) return null;
+      return { ts: row.ts, atMs, price, api24hChange: Number.isFinite(change24h) ? change24h : null };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.atMs - b.atMs);
+}
+
+function averageNumbers(values) {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function findTraderReferencePrice(series, targetMs) {
+  let before = null;
+  let after = null;
+  for (const point of series) {
+    if (point.atMs <= targetMs) before = point;
+    else if (!after) after = point;
+  }
+  return before || after || null;
+}
+
+function computeRsi(series, periods = 14) {
+  if (series.length <= periods) return null;
+  const tail = series.slice(-(periods + 1));
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i < tail.length; i++) {
+    const diff = tail[i].price - tail[i - 1].price;
+    if (diff > 0) gains += diff;
+    else losses += Math.abs(diff);
+  }
+  const avgGain = gains / periods;
+  const avgLoss = losses / periods;
+  if (!avgLoss && !avgGain) return 50;
+  if (!avgLoss) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function pctChange(current, reference) {
+  if (!Number.isFinite(current) || !Number.isFinite(reference) || reference <= 0) return null;
+  return ((current - reference) / reference) * 100;
+}
+
+function computeTraderIndicators(records, config, nowMs = null) {
+  const out = {};
+  for (const asset of config.assets) {
+    const series = buildTraderSeries(records, asset, config.vsCurrency);
+    const latest = series[series.length - 1] || null;
+    const pointNow = latest ? latest.atMs : (nowMs || Date.now());
+    const d24 = pointNow - 24 * 60 * 60 * 1000;
+    const d7 = pointNow - 7 * 24 * 60 * 60 * 1000;
+    const recent24h = series.filter((point) => point.atMs >= d24);
+    const recent7d = series.filter((point) => point.atMs >= d7);
+    const ref24 = findTraderReferencePrice(series, d24);
+    const ref7 = findTraderReferencePrice(series, d7);
+    out[asset] = {
+      latestPrice: latest ? latest.price : null,
+      api24hChange: latest ? latest.api24hChange : null,
+      sma24h: averageNumbers(recent24h.map((point) => point.price)),
+      sma7d: averageNumbers(recent7d.map((point) => point.price)),
+      rsi14: computeRsi(series, 14),
+      change24h: latest && ref24 ? pctChange(latest.price, ref24.price) : null,
+      change7d: latest && ref7 ? pctChange(latest.price, ref7.price) : null,
+      samples: series.length,
+      lastTs: latest ? latest.ts : null,
+    };
+  }
+  return out;
 }
 
 function normalizeHustlerJob(job) {
@@ -2139,6 +2441,417 @@ async function maybeRunHustlerScheduled() {
   return executeHustlerJob(jobs[0].id);
 }
 
+function getTraderRuntimeGuard(nowMs = Date.now()) {
+  const provider = loadHustlerProviderConfig();
+  const hustlerConfig = loadHustlerConfig();
+  const window5h = getWindow5hUsageStats();
+  const lastActivityMs = getLatestLocalActivityMs();
+  const idle = !lastActivityMs || (nowMs - lastActivityMs) >= hustlerConfig.idleMinutes * 60 * 1000;
+  const withinBudget = (window5h.totalTokens + HUSTLER_TOKEN_HEADROOM) < hustlerConfig.tokenBudget5h;
+  const blockers = [];
+  if (provider.mode === 'off') blockers.push('Claude CLI か Anthropic API が未設定です');
+  if (!idle) blockers.push(`遊休判定(${hustlerConfig.idleMinutes}分)を満たしていません`);
+  if (!withinBudget) blockers.push('直近5時間トークン予算を超過しています');
+  if (explorerRunning) blockers.push('探検家が実行中です');
+  if (hustlerRunning) blockers.push('商人が実行中です');
+  if (traderRunning) blockers.push('トレーダーが実行中です');
+  return {
+    mode: provider.mode,
+    model: provider.model,
+    cli: provider.cli,
+    apiKey: provider.apiKey,
+    idle,
+    idleMinutes: hustlerConfig.idleMinutes,
+    tokenBudget5h: hustlerConfig.tokenBudget5h,
+    window5h,
+    withinBudget,
+    running: traderRunning,
+    blockers,
+    canAnalyze: !blockers.length,
+  };
+}
+
+async function fetchTraderPricesFromApi(config, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const ids = config.assets.join(',');
+  const vs = traderPriceField(config.vsCurrency);
+  const url = 'https://api.coingecko.com/api/v3/simple/price?' + new URLSearchParams({
+    ids,
+    vs_currencies: vs,
+    include_24hr_change: 'true',
+  });
+  const res = await fetchImpl(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`CoinGecko ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const json = await res.json();
+  const prices = {};
+  const changeKey = traderChangeField(vs);
+  for (const asset of config.assets) {
+    const raw = json && json[asset];
+    if (!raw || typeof raw !== 'object') continue;
+    const price = Number(raw[vs]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    prices[asset] = { [vs]: price };
+    const change = Number(raw[changeKey]);
+    if (Number.isFinite(change)) prices[asset][changeKey] = change;
+  }
+  if (!Object.keys(prices).length) throw new Error('CoinGecko の価格レスポンスが空です');
+  return prices;
+}
+
+async function maybeFetchTraderPrices(options = {}) {
+  const paths = traderPaths(options.paths);
+  const config = options.config || loadTraderConfig(paths);
+  if (!config.enabled) return null;
+  const nowMs = options.now instanceof Date ? options.now.getTime()
+    : Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const history = options.history || loadTraderPriceHistory(paths, config);
+  const latest = history[history.length - 1] || null;
+  const latestMs = latest ? Date.parse(latest.ts) : 0;
+  if (!options.force && latestMs && (nowMs - latestMs) < config.priceIntervalMin * 60 * 1000) return latest;
+  try {
+    const prices = await fetchTraderPricesFromApi(config, options);
+    return appendTraderPriceRecord(
+      prices,
+      paths,
+      config,
+      options.now instanceof Date ? options.now.toISOString() : (typeof options.now === 'string' ? options.now : new Date(nowMs).toISOString())
+    );
+  } catch (e) {
+    if (options.silent) {
+      console.error('[trader] 価格取得失敗:', e.message);
+      return latest;
+    }
+    throw e;
+  }
+}
+
+function roundTraderNumber(value, digits = 2) {
+  if (!Number.isFinite(value)) return null;
+  const unit = 10 ** digits;
+  return Math.round(value * unit) / unit;
+}
+
+function traderLatestPricesMap(records, config) {
+  const latest = records[records.length - 1] || null;
+  const out = {};
+  const field = traderPriceField(config.vsCurrency);
+  const changeKey = traderChangeField(config.vsCurrency);
+  for (const asset of config.assets) {
+    const row = latest && latest.prices && latest.prices[asset];
+    out[asset] = {
+      price: row && Number.isFinite(Number(row[field])) ? Number(row[field]) : null,
+      api24hChange: row && Number.isFinite(Number(row[changeKey])) ? Number(row[changeKey]) : null,
+    };
+  }
+  return { ts: latest ? latest.ts : null, prices: out };
+}
+
+function computeTraderEquity(portfolio, latestPrices, config) {
+  let marketValue = 0;
+  const positions = {};
+  for (const asset of config.assets) {
+    const pos = portfolio.positions[asset];
+    if (!pos || pos.qty <= 0) continue;
+    const price = Number(latestPrices[asset] && latestPrices[asset].price);
+    const value = Number.isFinite(price) ? pos.qty * price : 0;
+    const cost = pos.qty * pos.avgCost;
+    positions[asset] = {
+      qty: pos.qty,
+      avgCost: pos.avgCost,
+      lastPrice: Number.isFinite(price) ? price : null,
+      marketValue: value,
+      unrealizedPnl: Number.isFinite(price) ? value - cost : null,
+      unrealizedPnlPct: Number.isFinite(price) && cost > 0 ? ((value - cost) / cost) * 100 : null,
+    };
+    marketValue += value;
+  }
+  const cash = Number(portfolio.cash) || 0;
+  return {
+    cash,
+    marketValue,
+    equity: cash + marketValue,
+    positions,
+  };
+}
+
+function buildTraderAnalysisPrompt({ config, latestPrices, indicators, portfolio, now }) {
+  const holdings = config.assets.map((asset) => {
+    const pos = portfolio.positions[asset];
+    return {
+      asset,
+      qty: roundTraderNumber(pos ? pos.qty : 0, 8),
+      avgCost: roundTraderNumber(pos ? pos.avgCost : 0, 2),
+      latestPrice: roundTraderNumber(latestPrices.prices[asset] && latestPrices.prices[asset].price, 2),
+      api24hChange: roundTraderNumber(latestPrices.prices[asset] && latestPrices.prices[asset].api24hChange, 2),
+      indicators: {
+        sma24h: roundTraderNumber(indicators[asset] && indicators[asset].sma24h, 2),
+        sma7d: roundTraderNumber(indicators[asset] && indicators[asset].sma7d, 2),
+        rsi14: roundTraderNumber(indicators[asset] && indicators[asset].rsi14, 2),
+        change24h: roundTraderNumber(indicators[asset] && indicators[asset].change24h, 2),
+        change7d: roundTraderNumber(indicators[asset] && indicators[asset].change7d, 2),
+      },
+    };
+  });
+  return `現在時刻: ${localDateStr(now)} ${hm(now)}
+対象: 暗号資産のペーパートレード(仮想資金)のみ
+重要:
+- 実際の注文や取引所 API は使わない前提です。
+- sizePct は 0 以上 30 以下の数値にしてください。
+- 売買判断は短期の勢いと過熱感のバランスで、無理な売買は避けてください。
+- JSON のみ返し、コードフェンスや説明文は付けません。
+
+設定:
+${JSON.stringify({
+    assets: config.assets,
+    vsCurrency: config.vsCurrency,
+    startBalance: config.startBalance,
+    cash: roundTraderNumber(portfolio.cash, 2),
+  }, null, 2)}
+
+現在の保有と指標:
+${JSON.stringify(holdings, null, 2)}
+
+返す JSON スキーマ:
+{
+  "signals": [
+    {
+      "asset": "bitcoin",
+      "action": "buy" | "sell" | "hold",
+      "sizePct": 0-30,
+      "confidence": 0-1,
+      "reasoning": "短い根拠"
+    }
+  ],
+  "marketNote": "全体メモ"
+}`;
+}
+
+function parseTraderAnalysis(text, config) {
+  const parsed = JSON.parse(stripJsonCodeFence(text));
+  const signals = (Array.isArray(parsed.signals) ? parsed.signals : [])
+    .map((x) => sanitizeTraderSignalEntry(x, config))
+    .filter(Boolean);
+  if (!signals.length) throw new Error('signals が空です');
+  const seen = new Set();
+  const deduped = [];
+  for (const signal of signals) {
+    if (seen.has(signal.asset)) continue;
+    seen.add(signal.asset);
+    deduped.push(signal);
+  }
+  return {
+    signals: deduped,
+    marketNote: typeof parsed.marketNote === 'string' ? parsed.marketNote.trim().slice(0, 2000) : '',
+  };
+}
+
+async function requestTraderAnalysis(payload, options = {}) {
+  const taskRunner = options.taskRunner || ((req) => runHustlerTextTask(req));
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await taskRunner(payload);
+    try {
+      return parseTraderAnalysis(raw, options.config);
+    } catch (e) {
+      lastErr = e;
+      payload = {
+        ...payload,
+        prompt: `${payload.prompt}\n\n前回は JSON 解析に失敗しました。必ず JSON のみを返してください。`,
+      };
+    }
+  }
+  throw lastErr || new Error('トレーダー分析JSONの解析に失敗しました');
+}
+
+function executeTraderSignals({ portfolio, analysis, latestPrices, config, ts }) {
+  const next = sanitizeTraderPortfolio(portfolio, config);
+  const trades = [];
+  for (const signal of analysis.signals) {
+    const asset = signal.asset;
+    const price = Number(latestPrices.prices[asset] && latestPrices.prices[asset].price);
+    const side = signal.action;
+    const sizePct = Math.max(0, Math.min(30, Number(signal.sizePct) || 0));
+    let qty = 0;
+    if (Number.isFinite(price) && price > 0) {
+      if (side === 'buy') {
+        const budget = next.cash * (sizePct / 100);
+        qty = budget > 0 ? budget / price : 0;
+        if (qty > 0) {
+          const prev = next.positions[asset] || { qty: 0, avgCost: 0 };
+          const totalQty = prev.qty + qty;
+          const totalCost = (prev.qty * prev.avgCost) + (qty * price);
+          next.positions[asset] = { qty: totalQty, avgCost: totalQty > 0 ? totalCost / totalQty : 0 };
+          next.cash -= qty * price;
+        }
+      } else if (side === 'sell') {
+        const prev = next.positions[asset] || { qty: 0, avgCost: 0 };
+        qty = prev.qty * (sizePct / 100);
+        if (qty > 0) {
+          const remain = prev.qty - qty;
+          next.cash += qty * price;
+          if (remain > 1e-12) next.positions[asset] = { qty: remain, avgCost: prev.avgCost };
+          else delete next.positions[asset];
+        }
+      }
+    }
+    const trade = sanitizeTraderTrade({
+      ts,
+      asset,
+      side,
+      qty,
+      price: Number.isFinite(price) ? price : 0,
+      reasoning: signal.reasoning,
+      sizePct,
+      confidence: signal.confidence,
+    }, config);
+    trades.push(trade);
+    next.trades.push(trade);
+  }
+  next.trades = next.trades.slice(-500);
+  return { portfolio: next, trades };
+}
+
+function getLastTraderAnalysisDate(portfolio) {
+  if (portfolio.lastAnalysis && portfolio.lastAnalysis.ts) return localDateStr(new Date(portfolio.lastAnalysis.ts));
+  const lastTrade = portfolio.trades[portfolio.trades.length - 1];
+  if (lastTrade && lastTrade.ts) return localDateStr(new Date(lastTrade.ts));
+  const lastEquity = portfolio.equityHistory[portfolio.equityHistory.length - 1];
+  return lastEquity ? lastEquity.date : null;
+}
+
+function traderAnalyzeBlockerMessage(guard) {
+  return guard.blockers[0] || '分析を実行できません';
+}
+
+function getTraderStatus(options = {}) {
+  const paths = traderPaths(options.paths);
+  const config = options.config || loadTraderConfig(paths);
+  const records = options.priceHistory || loadTraderPriceHistory(paths, config);
+  const latestPrices = options.latestPrices || traderLatestPricesMap(records, config);
+  const indicators = options.indicators || computeTraderIndicators(records, config);
+  const portfolio = options.portfolio || loadTraderPortfolio(paths, config);
+  const runtime = options.runtime || getTraderRuntimeGuard();
+  const totals = computeTraderEquity(portfolio, latestPrices, config);
+  const pnl = totals.equity - config.startBalance;
+  return {
+    enabled: config.enabled,
+    config,
+    latestPrices,
+    indicators,
+    cash: totals.cash,
+    marketValue: totals.marketValue,
+    equity: totals.equity,
+    startBalance: config.startBalance,
+    pnl,
+    pnlPct: config.startBalance > 0 ? (pnl / config.startBalance) * 100 : null,
+    positions: totals.positions,
+    latestSignals: portfolio.lastAnalysis ? portfolio.lastAnalysis.signals : [],
+    marketNote: portfolio.lastAnalysis ? portfolio.lastAnalysis.marketNote : '',
+    lastAnalysisAt: portfolio.lastAnalysis ? portfolio.lastAnalysis.ts : null,
+    trades: portfolio.trades.slice(-20).reverse(),
+    runtime: {
+      mode: runtime.mode,
+      idle: runtime.idle,
+      idleMinutes: runtime.idleMinutes,
+      tokenBudget5h: runtime.tokenBudget5h,
+      window5h: runtime.window5h,
+      withinBudget: runtime.withinBudget,
+      canAnalyze: runtime.canAnalyze,
+      blockers: runtime.blockers,
+      running: runtime.running,
+    },
+  };
+}
+
+async function analyzeTrader(options = {}) {
+  const paths = traderPaths(options.paths);
+  const now = options.now instanceof Date ? options.now : (options.now ? new Date(options.now) : new Date());
+  const config = options.config || loadTraderConfig(paths);
+  if (!config.enabled && !options.allowDisabled) throw new Error('トレーダーは無効です');
+  if (!options.skipBusyCheck) {
+    if (traderRunning) throw new Error('トレーダー分析を実行中です');
+    if (explorerRunning) throw new Error('探検家が実行中です');
+    if (hustlerRunning) throw new Error('商人が実行中です');
+  }
+  const runtime = options.runtime || getTraderRuntimeGuard(now.getTime());
+  if (!options.skipRuntimeGuard && !runtime.canAnalyze) throw new Error(traderAnalyzeBlockerMessage(runtime));
+
+  traderRunning = true;
+  try {
+    if (options.ensurePrice !== false) {
+      await maybeFetchTraderPrices({
+        paths,
+        config,
+        fetchImpl: options.fetchImpl,
+        now,
+        silent: false,
+      });
+    }
+    const priceHistory = options.priceHistory || loadTraderPriceHistory(paths, config);
+    const latestPrices = traderLatestPricesMap(priceHistory, config);
+    if (!latestPrices.ts) throw new Error('価格履歴がまだありません');
+    const indicators = computeTraderIndicators(priceHistory, config, now.getTime());
+    const portfolio = options.portfolio || loadTraderPortfolio(paths, config);
+    const provider = options.providerConfig || loadHustlerProviderConfig();
+    if (provider.mode === 'off' && !options.taskRunner) throw new Error('トレーダー分析には Claude CLI か Anthropic API が必要です');
+
+    const payload = {
+      cfg: provider,
+      system: 'あなたは暗号資産のペーパートレード専用アシスタントです。実際の注文を前提にせず、JSON のみ返してください。',
+      prompt: buildTraderAnalysisPrompt({ config, latestPrices, indicators, portfolio, now }),
+      maxTokens: 1100,
+    };
+    const analysis = options.analysis || await requestTraderAnalysis(payload, {
+      taskRunner: options.taskRunner,
+      config,
+    });
+
+    const executed = executeTraderSignals({
+      portfolio,
+      analysis,
+      latestPrices,
+      config,
+      ts: now.toISOString(),
+    });
+    const totals = computeTraderEquity(executed.portfolio, latestPrices, config);
+    executed.portfolio.equityHistory.push({
+      date: localDateStr(now),
+      equity: roundTraderNumber(totals.equity, 2),
+    });
+    executed.portfolio.equityHistory = executed.portfolio.equityHistory.slice(-365);
+    executed.portfolio.lastAnalysis = {
+      ts: now.toISOString(),
+      marketNote: analysis.marketNote,
+      provider: provider.mode,
+      signals: analysis.signals,
+    };
+    const saved = saveTraderPortfolio(executed.portfolio, paths, config);
+    return {
+      ok: true,
+      analysis,
+      trades: executed.trades,
+      portfolio: saved,
+      status: getTraderStatus({ paths, config, priceHistory, portfolio: saved, latestPrices, indicators, runtime }),
+    };
+  } finally {
+    traderRunning = false;
+  }
+}
+
+async function maybeRunTraderScheduled(now = new Date()) {
+  const config = loadTraderConfig();
+  if (!config.enabled) return null;
+  await maybeFetchTraderPrices({ config, now, silent: true });
+  const portfolio = loadTraderPortfolio(null, config);
+  const today = localDateStr(now);
+  if (now.getHours() !== config.analysisHour) return null;
+  if (getLastTraderAnalysisDate(portfolio) === today) return null;
+  const runtime = getTraderRuntimeGuard(now.getTime());
+  if (!runtime.canAnalyze) return null;
+  console.log(`[trader] 定期分析を開始: ${today} ${String(now.getHours()).padStart(2, '0')}:00`);
+  return analyzeTrader({ config, now, runtime });
+}
+
 function researchPrompt(topic) {
   return `あなたは「${topic}」分野を追う調査担当です。Web 検索を複数回おこない、直近1〜2週間の最新情報を十分に調べたうえで、日本語の Markdown レポートにまとめてください。
 
@@ -3131,6 +3844,60 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  /* ── トレーダー(ペーパートレード) ───────────── */
+  if (url.pathname === '/api/trader/status') {
+    sendJson(res, 200, getTraderStatus());
+    return;
+  }
+
+  if (url.pathname === '/api/trader/config') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { config: loadTraderConfig(), status: getTraderStatus() });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const config = saveTraderConfig(body || {});
+          sendJson(res, 200, { ok: true, config, status: getTraderStatus({ config }) });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/trader/analyze') {
+    Promise.resolve()
+      .then(async () => {
+        const result = await analyzeTrader();
+        sendJson(res, 200, result);
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/trader/history') {
+    const config = loadTraderConfig();
+    const portfolio = loadTraderPortfolio(null, config);
+    sendJson(res, 200, {
+      equityHistory: portfolio.equityHistory,
+      trades: portfolio.trades.slice().reverse(),
+      lastAnalysis: portfolio.lastAnalysis || null,
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/trader/reset') {
+    Promise.resolve()
+      .then(() => {
+        const config = loadTraderConfig();
+        const portfolio = resetTraderPortfolio(null, config);
+        sendJson(res, 200, { ok: true, portfolio, status: getTraderStatus({ config, portfolio }) });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
   if (url.pathname === '/api/data') {
     // ?local=1 はピアからの問い合わせ: 再帰的なピア取得を防ぐためローカルのみ返す
     const localOnly = url.searchParams.get('local') === '1';
@@ -3163,6 +3930,7 @@ const server = http.createServer((req, res) => {
 });
 
 ensureHustlerStorage();
+ensureTraderStorage();
 resetStaleHustlerJobs();
 
 server.on('error', (e) => {
@@ -3193,6 +3961,10 @@ function startServer() {
   const runHustler = () => maybeRunHustlerScheduled().catch((e) => console.error('[hustler] 定期実行エラー:', e.message));
   runHustler();
   setInterval(runHustler, HUSTLER_CHECK_MS);
+
+  const runTrader = () => maybeRunTraderScheduled().catch((e) => console.error('[trader] 定期実行エラー:', e.message));
+  runTrader();
+  setInterval(runTrader, HUSTLER_CHECK_MS);
 }
 
 if (require.main === module) startServer();
@@ -3202,6 +3974,16 @@ module.exports = {
   startServer,
   loadHustlerConfig,
   saveHustlerConfig,
+  loadTraderConfig,
+  saveTraderConfig,
+  loadTraderPortfolio,
+  saveTraderPortfolio,
+  loadTraderPriceHistory,
+  appendTraderPriceRecord,
+  getTraderStatus,
+  analyzeTrader,
+  maybeRunTraderScheduled,
+  resetTraderPortfolio,
   loadHustlerJobs,
   saveHustlerJobs,
   loadHustlerRevenue,
@@ -3236,5 +4018,17 @@ module.exports = {
     maybeQueueHustlerFromExplorer,
     transitionHustlerJob,
     transitionHustlerOutput,
+    traderPaths,
+    makeDefaultTraderPortfolio,
+    sanitizeTraderConfig,
+    sanitizeTraderPortfolio,
+    computeTraderIndicators,
+    traderLatestPricesMap,
+    computeTraderEquity,
+    parseTraderAnalysis,
+    fetchTraderPricesFromApi,
+    maybeFetchTraderPrices,
+    executeTraderSignals,
+    getTraderRuntimeGuard,
   },
 };

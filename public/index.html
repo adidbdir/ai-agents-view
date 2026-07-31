@@ -537,6 +537,82 @@
     font-size: 12px; color: #7b8794; background: #fbfcfe;
   }
 
+  /* ── トレーダー(ペーパートレード)──────────────── */
+  .tpanel { width: 480px; }
+  .tpanel .panel-head { position: relative; background: linear-gradient(135deg, #2e6c4f 0%, #1e8b72 100%); }
+  .ttabs {
+    display: flex; gap: 8px; padding: 10px 14px 0; border-bottom: 1px solid #e8edf2;
+    background: rgba(255,255,255,.94);
+  }
+  .ttab {
+    border: none; border-radius: 11px 11px 0 0; padding: 10px 14px 9px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 800; color: #617184; background: #eef3f7;
+  }
+  .ttab.active { background: linear-gradient(135deg, #2e6c4f, #1e8b72); color: #fff; }
+  .tbody { flex: 1; overflow-y: auto; padding: 14px 16px 20px; }
+  .tcard {
+    background: #fff; border: 1px solid #e4eaf1; border-radius: 14px; padding: 12px 13px; margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(40,60,90,.05);
+  }
+  .tgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .trow { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .tlabel { font-size: 11px; font-weight: 800; color: var(--gray-txt); letter-spacing: .06em; margin-bottom: 5px; }
+  .tinput {
+    width: 100%; font-family: inherit; font-size: 13px; color: var(--navy); background: #fff;
+    border: 1px solid #d5dde6; border-radius: 11px; padding: 9px 11px;
+  }
+  .tbtn {
+    border: none; border-radius: 11px; padding: 10px 14px; cursor: pointer; font-family: inherit;
+    font-size: 12.5px; font-weight: 800; color: #fff; background: linear-gradient(135deg, #2e6c4f, #1e8b72);
+  }
+  .tbtn.alt { background: #edf2f7; color: #2c4157; }
+  .tbtn.warn { background: #c0392b; }
+  .tbtn:disabled { opacity: .45; cursor: default; }
+  .ttoggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .ttoggle input { width: 18px; height: 18px; accent-color: #1e8b72; }
+  .tmeta { font-size: 12px; line-height: 1.75; color: #415264; }
+  .tmeta b { color: #1f2c38; }
+  .tchips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .tchip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 800; background: #edf2f7; color: #506070;
+  }
+  .tchip.on { background: #dbf7ee; color: #176a57; }
+  .tchip.err { background: #fdecec; color: #c0392b; }
+  .tasset {
+    border: 1px solid #e4eaf1; border-radius: 12px; padding: 10px 11px; background: #fbfcfe; margin-top: 8px;
+  }
+  .tasset .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .tasset .ttl { font-size: 13px; font-weight: 700; line-height: 1.45; color: #223242; }
+  .tasset .sub { font-size: 11px; color: #7b8794; margin-top: 4px; }
+  .tpnl-pos { color: #176a57; }
+  .tpnl-neg { color: #c0392b; }
+  .tequity {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px;
+  }
+  .tequity .box {
+    border: 1px solid #e4eaf1; border-radius: 12px; padding: 10px 11px; background: #fbfcfe;
+  }
+  .tequity .k { font-size: 10.5px; color: #7b8794; letter-spacing: .06em; }
+  .tequity .v { font-size: 16px; font-weight: 800; color: #223242; margin-top: 4px; }
+  .tchart {
+    margin-top: 12px; border: 1px solid #e4eaf1; border-radius: 14px; background: linear-gradient(180deg, #f8fbfa, #fff);
+    padding: 10px;
+  }
+  .tchart svg { display: block; width: 100%; height: auto; }
+  .tlist-empty { color: #7a8794; font-size: 12px; line-height: 1.8; padding: 10px 0; }
+  .ttrade {
+    border: 1px solid #e4eaf1; border-radius: 12px; padding: 10px 11px; background: #fff; margin-top: 8px;
+  }
+  .ttrade .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .ttrade .ttl { font-size: 13px; font-weight: 700; color: #223242; }
+  .ttrade .sub { font-size: 11px; color: #7b8794; margin-top: 4px; }
+  .ttrade details { margin-top: 8px; }
+  .ttrade summary { cursor: pointer; font-size: 12px; font-weight: 800; color: #2c4157; }
+  .ttrade summary::-webkit-details-marker { display: none; }
+  .ttrade .reason { margin-top: 6px; font-size: 12px; line-height: 1.7; color: #415264; white-space: pre-wrap; }
+  .tcat-gain { font-size: 12px; font-weight: 800; fill: #176a57; }
+
   /* ── パネルのリサイズハンドル(左端ドラッグで幅変更)──────── */
   .panel-resize {
     position: absolute; left: 0; top: 0; width: 10px; height: 100%;
@@ -605,12 +681,13 @@
     .zoom-ctrl .zlevel { min-width: 34px; }
 
     /* パネルは全画面、リサイズ無効 */
-    .panel, .gpanel, .spanel, .xpanel, .hpanel { width: 100%; max-width: 100%; }
+    .panel, .gpanel, .spanel, .xpanel, .hpanel, .tpanel { width: 100%; max-width: 100%; }
     .panel-resize { display: none; }
 
     /* iOS のフォーカス時ズームを防ぐ(入力は16px以上に) */
-    .sform textarea, .xform input, .gadd input, .hinput, .hselect, .htextarea { font-size: 16px; }
+    .sform textarea, .xform input, .gadd input, .hinput, .hselect, .htextarea, .tinput { font-size: 16px; }
     .hsplit { grid-template-columns: 1fr; min-height: 0; }
+    .tequity, .tgrid { grid-template-columns: 1fr; }
 
     /* ノッチ・ブラウザ上部バーを避ける(セーフエリア対応)*/
     .panel-head { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
@@ -737,6 +814,22 @@
     <div class="hbody" id="h-body"></div>
   </div>
 
+  <div class="panel tpanel" id="tpanel">
+    <div class="panel-resize" id="t-resize"></div>
+    <div class="panel-head">
+      <button class="close" onclick="closeTPanel()">✕</button>
+      <div class="pj">トレーダー・相場</div>
+      <div class="pth" id="t-sub">ペーパートレード(仮想資金)</div>
+      <div class="badges" id="t-badges"></div>
+    </div>
+    <div class="ttabs">
+      <button class="ttab active" id="t-tab-market" onclick="setTTab('market')">相場</button>
+      <button class="ttab" id="t-tab-portfolio" onclick="setTTab('portfolio')">ポートフォリオ</button>
+      <button class="ttab" id="t-tab-history" onclick="setTTab('history')">取引履歴</button>
+    </div>
+    <div class="tbody" id="t-body"></div>
+  </div>
+
   <!-- ミニ表示(PiP)の中身。通常は非表示、PiP ウィンドウに移して使う -->
   <div id="mini" class="mini">
     <div class="mini-screen" data-screen="list">
@@ -776,6 +869,11 @@ let hTab = 'work';
 let hCurrentOutputId = null;
 let hOutputCache = {};
 let hPollAt = 0;
+let TSTATUS = null;
+let THISTORY = { equityHistory: [], trades: [], lastAnalysis: null };
+let tBusy = false;
+let tTab = 'market';
+let tPollAt = 0;
 
 /* ══════════ ユーティリティ ══════════ */
 function el(name, attrs = {}, children = []) {
@@ -1156,6 +1254,21 @@ function catAccessoryNodes(accessory, coat, pose, part = 'head') {
         fill: '#cb7b41', stroke: '#9c5b2c', 'stroke-width': .7,
       }));
       parts.push(el('path', { d: `M4.8,${(y + 2.5).toFixed(1)} C6.2,${(y + 2.8).toFixed(1)} 7.1,${(y + 3.3).toFixed(1)} 8.4,${(y + 4.3).toFixed(1)}`, stroke: '#9c5b2c', 'stroke-width': .85, 'stroke-linecap': 'round', fill: 'none' }));
+    } else if (acc === 'trader' && part === 'head') {
+      const g = el('g');
+      g.appendChild(el('path', {
+        d: 'M-8.4,-2.8 C-6.5,-6.4 -3.1,-8.5 0,-8.7 C3,-8.5 6.3,-6.6 8.4,-2.8 C5.8,-1.4 2.7,-.8 0,-.7 C-2.7,-.8 -5.8,-1.4 -8.4,-2.8 Z',
+        fill: '#65b76d', stroke: '#2f7a4d', 'stroke-width': .8,
+      }));
+      g.appendChild(el('path', {
+        d: 'M-8.9,-1.6 C-5.9,.2 5.9,.2 8.9,-1.6 C6.3,1.2 -6.3,1.2 -8.9,-1.6 Z',
+        fill: '#3c9c61', stroke: '#2f7a4d', 'stroke-width': .75,
+      }));
+      parts.push(g);
+    } else if (acc === 'trader' && part === 'body') {
+      const y = pose === 'walk' ? -14.4 : -18.6;
+      parts.push(el('path', { d: `M0,${y} l-2.4,6 h4.8 Z`, fill: '#2f7a4d', stroke: '#1f5a3a', 'stroke-width': .75 }));
+      parts.push(el('circle', { cx: 0, cy: y - 1.1, r: 1.3, fill: '#f3f7f4' }));
     } else if (acc === 'merchant' && part === 'sleep-side') {
       parts.push(el('path', { d: 'M13.6,-15.8 C16.5,-16.3 19.1,-14.9 20.2,-12.2 C18.6,-9.8 15.6,-8.8 12.8,-9.8 C11.8,-11.6 12.1,-14.5 13.6,-15.8 Z', fill: '#bc8341', stroke: '#96611f', 'stroke-width': .8, opacity: .97 }));
       parts.push(el('ellipse', { cx: 20.3, cy: -12.4, rx: 2.5, ry: 1.8, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .8 }));
@@ -1166,11 +1279,11 @@ function catAccessoryNodes(accessory, coat, pose, part = 'head') {
 
 /* 猫(足元が原点)。pose: 'stand' | 'work' | 'walk' | 'sleep' | 'present' */
 function appendCatBodyAccessory(parent, accessory, pose) {
-  if (!hasCatAccessory(accessory, 'merchant')) return;
+  if (!hasCatAccessory(accessory, 'merchant') && !hasCatAccessory(accessory, 'trader')) return;
   const g = el('g');
-  if (pose === 'sleep') {
+  if (hasCatAccessory(accessory, 'merchant') && pose === 'sleep') {
     for (const n of catAccessoryNodes('merchant', null, pose, 'sleep-side')) g.appendChild(n);
-  } else {
+  } else if (hasCatAccessory(accessory, 'merchant')) {
     const apron = pose === 'present'
       ? 'M-5.6,-20.4 C-4.4,-16 -3.7,-9.3 -1.2,-3 C1.8,-1.8 4.5,-4.7 5.7,-10.8 C6.2,-13.6 5.9,-17.1 5.2,-20.4 C3.6,-18.4 1.8,-17.6 0,-17.6 C-1.8,-17.6 -3.7,-18.4 -5.6,-20.4 Z'
       : pose === 'walk'
@@ -1181,6 +1294,9 @@ function appendCatBodyAccessory(parent, accessory, pose) {
     g.appendChild(el('path', { d: 'M-2.8,-20.7 Q0,-18.3 2.8,-20.7', stroke: '#f7e0b3', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none', opacity: .88 }));
     g.appendChild(el('ellipse', { cx: 10.7, cy: coinY, rx: 2.9, ry: 1.95, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .9 }));
     g.appendChild(el('path', { d: `M9.4,${coinY} h2.6`, stroke: '#9f7b26', 'stroke-width': .85, 'stroke-linecap': 'round', fill: 'none' }));
+  }
+  if (hasCatAccessory(accessory, 'trader') && pose !== 'sleep') {
+    for (const n of catAccessoryNodes('trader', null, pose, 'body')) g.appendChild(n);
   }
   parent.appendChild(g);
 }
@@ -1800,6 +1916,48 @@ function hustlerStation(unread) {
   return g;
 }
 
+function traderStation(profitUp) {
+  const g = el('g', { class: 'node-g' });
+  g.appendChild(el('path', { d: tilePath(72, 36), fill: '#e9f5ef', stroke: '#fff', 'stroke-width': 2.5 }));
+  g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#7cc4a1', 'stroke-width': 2.5, class: 'pulse-ring' }));
+
+  const pt = cat({ pose: 'work', coat: 'grayTabby', accessory: 'trader', anim: 'bob', seed: 'trader' });
+  pt.setAttribute('transform', 'translate(10,-30) scale(1.06)');
+  g.appendChild(pt);
+
+  g.appendChild(isoBox(0, -4, 58, 32, 24, '#f7fbf8', '#c5e2d5', '#a7ceb9'));
+  g.appendChild(el('path', { d: 'M-8,-22 l13,-6.5 l9,4.5 l-13,6.5 Z', fill: '#e4f2ea' }));
+  const chart = el('g', { transform: 'translate(-16,-29)' });
+  chart.appendChild(el('path', { d: 'M-12,-3 L9,-14 L9,-30 L-12,-20 Z', fill: '#28463c' }));
+  chart.appendChild(el('path', { d: 'M-9,-7 L6,-14 L6,-27 L-9,-20 Z', fill: '#d9f5e8', filter: 'url(#glow)' }));
+  chart.appendChild(el('path', { d: 'M-8,-17 L-4,-19 L-1,-15 L3,-18 L5,-13', stroke: '#1e8b72', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }));
+  g.appendChild(chart);
+
+  const bub = el('g', { class: 'bob', transform: 'translate(28,-84)' });
+  bub.appendChild(el('rect', { x: -17, y: -16, width: 34, height: 27, rx: 10, fill: '#fff', stroke: '#7cc4a1', 'stroke-width': 2, filter: 'url(#soft)' }));
+  bub.appendChild(el('path', { d: 'M-7,9 l7,9 l7,-9 Z', fill: '#fff' }));
+  const bt = el('text', { x: 0, y: 3, 'text-anchor': 'middle', 'font-size': 15 });
+  txt(bt, '📈'); bub.appendChild(bt);
+  g.appendChild(bub);
+
+  if (profitUp) {
+    const fx = el('text', { x: 44, y: -90, class: 'tcat-gain', 'text-anchor': 'middle' });
+    txt(fx, '😺');
+    g.appendChild(fx);
+  }
+
+  const plate = el('g', { transform: 'translate(0,50)' });
+  plate.appendChild(el('rect', { x: -60, y: -14, width: 120, height: 31, rx: 9, fill: '#245a44', filter: 'url(#soft)' }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, 'トレーダー・相場');
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#d9f1e5', 'font-size': 9.5 });
+  txt(t2, 'クリックで確認 📈');
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
 /* ══════════ フロア(プレート) ══════════ */
 function buildDefs() {
   const defs = el('defs');
@@ -2058,6 +2216,7 @@ function updateAmbientScene(cozy, placed) {
   const obstacles = [
     ambientObstacle(.08, .08, .11, .1),
     ambientObstacle(.90, .13, .11, .1),
+    ambientObstacle(.17, .89, .11, .1),
     ambientObstacle(.13, .34, .09, .08),
     ambientObstacle(.46, .94, .09, .08),
     ambientObstacle(.88, .72, .08, .08),
@@ -2203,6 +2362,15 @@ function render() {
     items.push({ y: pt.y + 1e4, el: g });
   }
 
+  // トレーダー(常に最前面・クリックでペーパートレード)
+  {
+    const pt = iso(.17, .89);
+    const g = traderStation(TSTATUS && Number(TSTATUS.pnl) > 0);
+    g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
+    g.addEventListener('pointerdown', openTPanel);
+    items.push({ y: pt.y + 1e4, el: g });
+  }
+
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
   updateAmbientScene(cozy, placed);
@@ -2252,7 +2420,7 @@ function openPanel(id) {
   selectedId = id;
   const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
   if (!p) return;
-  closeSPanel(); closeXPanel(); closeHPanel();
+  closeSPanel(); closeXPanel(); closeHPanel(); closeTPanel();
   fillPanel(p);
   $('panel').classList.add('open');
 }
@@ -2776,7 +2944,7 @@ async function loadXStatus() {
 }
 
 function openXPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeHPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeHPanel(); closeTPanel();
   $('xpanel').classList.add('open');
   localStorage.setItem('xSeenAt', String(Date.now())); // 開いたら既読
   if (xUnread) { xUnread = false; forceRerender(); }
@@ -3137,7 +3305,7 @@ function setHTab(tab) {
   renderHPanel();
 }
 function openHPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeXPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeTPanel();
   $('hpanel').classList.add('open');
   localStorage.setItem('hSeenAt', String(Date.now()));
   if (hUnread) { hUnread = false; forceRerender(); }
@@ -3627,6 +3795,288 @@ async function saveHRevenue(ev) {
 }
 maybePollHustler(true);
 
+/* ══════════ トレーダー(ペーパートレード)══════════ */
+function fmtPct(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : '—';
+}
+function fmtTraderQty(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '0';
+  const digits = v >= 1 ? 4 : 6;
+  return v.toFixed(digits).replace(/\.?0+$/, '');
+}
+function tSignalLabel(side) {
+  return { buy: '買い', sell: '売り', hold: '様子見' }[side] || side;
+}
+function tSignalClass(side) {
+  return side === 'buy' ? 'on' : side === 'sell' ? 'err' : '';
+}
+function parseTraderAssets(raw) {
+  return [...new Set(String(raw || '').split(/[,、\s\n]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+}
+async function loadTraderData() {
+  const prevPositive = TSTATUS && Number(TSTATUS.pnl) > 0;
+  const [status, history] = await Promise.all([
+    hFetchJson('/api/trader/status'),
+    hFetchJson('/api/trader/history'),
+  ]);
+  TSTATUS = status;
+  THISTORY = history || { equityHistory: [], trades: [], lastAnalysis: null };
+  const nextPositive = TSTATUS && Number(TSTATUS.pnl) > 0;
+  if (prevPositive !== nextPositive) forceRerender();
+}
+function maybePollTrader(force) {
+  const now = Date.now();
+  if (!force && now - tPollAt < 15000) return;
+  tPollAt = now;
+  loadTraderData()
+    .then(() => { if ($('tpanel').classList.contains('open')) renderTPanel(); })
+    .catch(() => { if ($('tpanel').classList.contains('open')) renderTPanel(); });
+}
+function renderTHeader() {
+  const sub = $('t-sub');
+  const badges = $('t-badges');
+  if (!TSTATUS) {
+    sub.textContent = 'ペーパートレード(仮想資金)';
+    badges.innerHTML = '<span class="badge">読込中</span>';
+    return;
+  }
+  const cfg = TSTATUS.config || {};
+  sub.textContent = `ペーパートレード(仮想資金) ・ CoinGecko / ${String((cfg.vsCurrency || 'jpy')).toUpperCase()} ・ ${cfg.priceIntervalMin || 15}分間隔`;
+  badges.innerHTML = `
+    <span class="badge ${TSTATUS.enabled ? 'on' : ''}">${TSTATUS.enabled ? 'ON' : 'OFF'}</span>
+    <span class="badge ${TSTATUS.runtime && TSTATUS.runtime.idle ? 'on' : ''}">${TSTATUS.runtime && TSTATUS.runtime.idle ? '遊休中' : '使用中'}</span>
+    <span class="badge ${TSTATUS.runtime && TSTATUS.runtime.canAnalyze ? 'on' : ''}">${TSTATUS.runtime && TSTATUS.runtime.canAnalyze ? '分析可能' : '条件待ち'}</span>`;
+}
+function setTTab(tab) {
+  tTab = tab;
+  renderTPanel();
+}
+function openTPanel() {
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel();
+  $('tpanel').classList.add('open');
+  renderTPanel();
+  maybePollTrader(true);
+}
+function closeTPanel() { $('tpanel').classList.remove('open'); }
+function renderTTabs() {
+  for (const tab of ['market', 'portfolio', 'history']) {
+    $('t-tab-' + tab).classList.toggle('active', tTab === tab);
+  }
+}
+function renderTraderSignals(signals) {
+  if (!signals || !signals.length) return '<div class="tlist-empty">まだシグナルはありません</div>';
+  return `<div class="tchips">${signals.map((sig) => `
+    <span class="tchip ${tSignalClass(sig.action)}">${esc(sig.asset)} ${esc(tSignalLabel(sig.action))} ${Number(sig.sizePct || 0)}%</span>`).join('')}</div>`;
+}
+function renderTMarket() {
+  if (!TSTATUS) return '<div class="empty">トレーダー状態を取得できません</div>';
+  const cfg = TSTATUS.config || {};
+  const latest = TSTATUS.latestPrices || { ts: null, prices: {} };
+  const indicators = TSTATUS.indicators || {};
+  const blocker = TSTATUS.runtime && TSTATUS.runtime.blockers && TSTATUS.runtime.blockers[0];
+  return `
+    <div class="tcard">
+      <form onsubmit="return saveTConfig(event)">
+        <div class="ttoggle">
+          <div>
+            <div class="tlabel">有効化</div>
+            <div class="tmeta">CoinGecko 価格取得と日次分析は opt-in です。実売買は行いません。</div>
+          </div>
+          <input type="checkbox" id="t-enabled" ${cfg.enabled ? 'checked' : ''}>
+        </div>
+        <div class="tgrid" style="margin-top:10px">
+          <div style="grid-column:1 / -1"><div class="tlabel">資産ID</div><input class="tinput" id="t-assets" value="${esc((cfg.assets || []).join(', '))}" placeholder="bitcoin, ethereum"></div>
+          <div><div class="tlabel">分析時刻(0-23)</div><input class="tinput" id="t-hour" type="number" min="0" max="23" value="${esc(cfg.analysisHour)}"></div>
+          <div><div class="tlabel">初期資金(JPY)</div><input class="tinput" id="t-balance" type="number" min="1000" step="1000" value="${esc(cfg.startBalance)}"></div>
+        </div>
+        <div class="tmeta" style="margin-top:10px">価格取得は ${cfg.priceIntervalMin} 分ごと / 通貨は ${String(cfg.vsCurrency || 'jpy').toUpperCase()} 固定です。</div>
+        <div class="trow">
+          <button class="tbtn" type="submit">設定を保存</button>
+          <button class="tbtn alt" type="button" onclick="runTAnalyze()" ${tBusy ? 'disabled' : ''}>▶ 今すぐ分析</button>
+          <button class="tbtn warn" type="button" onclick="resetTrader()" ${tBusy ? 'disabled' : ''}>リセット</button>
+        </div>
+      </form>
+      ${blocker ? `<div class="tmeta" style="margin-top:8px;color:#c0392b">分析条件: ${esc(blocker)}</div>` : ''}
+      ${TSTATUS.marketNote ? `<div class="tmeta" style="margin-top:8px"><b>相場メモ:</b> ${esc(TSTATUS.marketNote)}</div>` : ''}
+      ${renderTraderSignals(TSTATUS.latestSignals)}
+    </div>
+
+    <div class="tcard">
+      <div class="tlabel">最新価格</div>
+      <div class="tmeta">${latest.ts ? `最終更新 ${esc(fmtAt(Date.parse(latest.ts)))}` : '価格履歴はまだありません'}</div>
+      ${(cfg.assets || []).map((asset) => {
+        const price = latest.prices && latest.prices[asset];
+        const ind = indicators[asset] || {};
+        const ch = Number(price && price.api24hChange);
+        return `
+          <div class="tasset">
+            <div class="top">
+              <div>
+                <div class="ttl">${esc(asset)}</div>
+                <div class="sub">${price && Number.isFinite(Number(price.price)) ? fmtMoney(price.price) : '価格なし'} / 24h ${Number.isFinite(ch) ? fmtPct(ch) : '—'}</div>
+              </div>
+              <span class="tchip ${ch > 0 ? 'on' : ch < 0 ? 'err' : ''}">${Number.isFinite(ch) ? fmtPct(ch) : '—'}</span>
+            </div>
+            <div class="tchips">
+              <span class="tchip">SMA24h ${Number.isFinite(Number(ind.sma24h)) ? fmtMoney(ind.sma24h) : '—'}</span>
+              <span class="tchip">SMA7d ${Number.isFinite(Number(ind.sma7d)) ? fmtMoney(ind.sma7d) : '—'}</span>
+              <span class="tchip ${Number(ind.rsi14) >= 70 || Number(ind.rsi14) <= 30 ? 'err' : ''}">RSI14 ${Number.isFinite(Number(ind.rsi14)) ? Number(ind.rsi14).toFixed(1) : '—'}</span>
+              <span class="tchip ${Number(ind.change24h) > 0 ? 'on' : Number(ind.change24h) < 0 ? 'err' : ''}">変化24h ${Number.isFinite(Number(ind.change24h)) ? fmtPct(ind.change24h) : '—'}</span>
+              <span class="tchip ${Number(ind.change7d) > 0 ? 'on' : Number(ind.change7d) < 0 ? 'err' : ''}">変化7d ${Number.isFinite(Number(ind.change7d)) ? fmtPct(ind.change7d) : '—'}</span>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+function renderTEquityChart(history, startBalance) {
+  if (!history.length) return '<div class="tlist-empty">equity の記録はまだありません</div>';
+  const W = 420, H = 160, P = 18;
+  const vals = history.map((x) => Number(x.equity) || 0);
+  vals.push(Number(startBalance) || 0);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = Math.max(1, max - min);
+  const pts = history.map((item, i) => {
+    const x = P + (history.length === 1 ? (W - P * 2) / 2 : ((W - P * 2) * i / (history.length - 1)));
+    const y = H - P - (((Number(item.equity) || 0) - min) / span) * (H - P * 2);
+    return `${x},${y}`;
+  }).join(' ');
+  const baseY = H - P - (((Number(startBalance) || 0) - min) / span) * (H - P * 2);
+  return `<div class="tchart"><svg viewBox="0 0 ${W} ${H}">
+    <line x1="${P}" y1="${baseY}" x2="${W - P}" y2="${baseY}" stroke="#d9e5de" stroke-dasharray="4 4"/>
+    <polyline points="${pts}" fill="none" stroke="#1e8b72" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="${P}" y="${Math.max(12, baseY - 6)}" font-size="10" fill="#7b8794">初期 ${esc(fmtMoney(startBalance))}</text>
+    <text x="${W - P}" y="${H - 4}" text-anchor="end" font-size="10" fill="#7b8794">${esc(history[history.length - 1].date || '')}</text>
+  </svg></div>`;
+}
+function renderTPortfolio() {
+  if (!TSTATUS) return '<div class="empty">ポートフォリオを取得できません</div>';
+  const pnlClass = Number(TSTATUS.pnl) >= 0 ? 'tpnl-pos' : 'tpnl-neg';
+  const positions = TSTATUS.positions || {};
+  const keys = Object.keys(positions);
+  return `
+    <div class="tcard">
+      <div class="tlabel">総資産</div>
+      <div class="tequity">
+        <div class="box"><div class="k">総資産</div><div class="v">${esc(fmtMoney(TSTATUS.equity || 0))}</div></div>
+        <div class="box"><div class="k">現金</div><div class="v">${esc(fmtMoney(TSTATUS.cash || 0))}</div></div>
+        <div class="box"><div class="k">損益</div><div class="v ${pnlClass}">${esc(fmtMoney(TSTATUS.pnl || 0))}<br><span style="font-size:12px">${esc(fmtPct(TSTATUS.pnlPct))}</span></div></div>
+      </div>
+      ${renderTEquityChart(THISTORY.equityHistory || [], TSTATUS.startBalance || 0)}
+    </div>
+    <div class="tcard">
+      <div class="tlabel">ポジション</div>
+      ${keys.length ? keys.map((asset) => {
+        const pos = positions[asset];
+        return `
+          <div class="tasset">
+            <div class="top">
+              <div>
+                <div class="ttl">${esc(asset)}</div>
+                <div class="sub">保有 ${esc(fmtTraderQty(pos.qty))} / 平均 ${esc(fmtMoney(pos.avgCost || 0))}</div>
+              </div>
+              <span class="tchip ${(Number(pos.unrealizedPnl) || 0) >= 0 ? 'on' : 'err'}">${esc(fmtMoney(pos.marketValue || 0))}</span>
+            </div>
+            <div class="tchips">
+              <span class="tchip">評価額 ${esc(fmtMoney(pos.marketValue || 0))}</span>
+              <span class="tchip ${(Number(pos.unrealizedPnl) || 0) >= 0 ? 'on' : 'err'}">含み損益 ${esc(fmtMoney(pos.unrealizedPnl || 0))}</span>
+              <span class="tchip ${(Number(pos.unrealizedPnlPct) || 0) >= 0 ? 'on' : 'err'}">${esc(fmtPct(pos.unrealizedPnlPct))}</span>
+            </div>
+          </div>`;
+      }).join('') : '<div class="tlist-empty">保有ポジションはありません</div>'}
+    </div>`;
+}
+function renderTHistory() {
+  const trades = THISTORY.trades || [];
+  if (!trades.length) return '<div class="empty">取引履歴はまだありません</div>';
+  return `<div class="tcard">
+    <div class="tlabel">シグナル / 約定</div>
+    ${trades.map((trade) => `
+      <div class="ttrade">
+        <div class="top">
+          <div>
+            <div class="ttl">${esc(trade.asset)} / ${esc(tSignalLabel(trade.side))}</div>
+            <div class="sub">${esc(fmtAt(Date.parse(trade.ts)))} ・ 数量 ${esc(fmtTraderQty(trade.qty))} ・ 価格 ${esc(fmtMoney(trade.price || 0))}</div>
+          </div>
+          <div class="tchips">
+            <span class="tchip ${tSignalClass(trade.side)}">${esc(tSignalLabel(trade.side))}</span>
+            <span class="tchip">${Number(trade.sizePct || 0)}%</span>
+            <span class="tchip">確信 ${(Number(trade.confidence || 0) * 100).toFixed(0)}%</span>
+          </div>
+        </div>
+        <details>
+          <summary>根拠を表示</summary>
+          <div class="reason">${esc(trade.reasoning || '記録なし')}</div>
+        </details>
+      </div>`).join('')}
+  </div>`;
+}
+function renderTPanel() {
+  renderTTabs();
+  renderTHeader();
+  const body = $('t-body');
+  if (!body) return;
+  if (!TSTATUS && !tBusy) {
+    body.innerHTML = '<div class="empty">トレーダー状態を読み込み中…</div>';
+    return;
+  }
+  body.innerHTML = tTab === 'market' ? renderTMarket()
+    : tTab === 'portfolio' ? renderTPortfolio()
+      : renderTHistory();
+}
+async function saveTConfig(ev) {
+  ev.preventDefault();
+  try {
+    tBusy = true;
+    const cfg = (TSTATUS && TSTATUS.config) || {};
+    const j = await hFetchJson('/api/trader/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: $('t-enabled').checked,
+        assets: parseTraderAssets($('t-assets').value),
+        analysisHour: Number($('t-hour').value),
+        startBalance: Number($('t-balance').value),
+        vsCurrency: cfg.vsCurrency || 'jpy',
+        priceIntervalMin: cfg.priceIntervalMin || 15,
+      }),
+    });
+    TSTATUS = j.status || TSTATUS;
+    await loadTraderData();
+    renderTPanel();
+  } catch (e) {
+    alert('設定を保存できませんでした: ' + e.message);
+  } finally { tBusy = false; }
+  return false;
+}
+async function runTAnalyze() {
+  try {
+    tBusy = true;
+    renderTPanel();
+    await hFetchJson('/api/trader/analyze', { method: 'POST' });
+    await loadTraderData();
+    tTab = 'portfolio';
+    renderTPanel();
+  } catch (e) {
+    alert('分析を実行できませんでした: ' + e.message);
+  } finally { tBusy = false; renderTPanel(); }
+}
+async function resetTrader() {
+  if (!confirm('仮想ポートフォリオを初期化します。実売買は行われません。')) return;
+  try {
+    tBusy = true;
+    await hFetchJson('/api/trader/reset', { method: 'POST' });
+    await loadTraderData();
+    tTab = 'market';
+    renderTPanel();
+  } catch (e) {
+    alert('リセットできませんでした: ' + e.message);
+  } finally { tBusy = false; renderTPanel(); }
+}
+maybePollTrader(true);
+
 /* ══════════ パネルのリサイズ(左端ドラッグ)══════════ */
 // 右ドッキングのパネルは幅を増やすと左へ広がる。localStorage に幅を保存・復元。
 function makeResizable(panelId, handle) {
@@ -3659,6 +4109,7 @@ function makeResizable(panelId, handle) {
 makeResizable('spanel', $('s-resize'));
 makeResizable('xpanel', $('x-resize'));
 makeResizable('hpanel', $('h-resize'));
+makeResizable('tpanel', $('t-resize'));
 
 /* ══════════ 時間帯で変わる外の空 ══════════ */
 // 空色のキーフレーム [時刻, [上, 中, 地平線]]。間を補間して滑らかに遷移。
@@ -3927,7 +4378,7 @@ function renderGoogle() {
   $('g-body').innerHTML = html;
 }
 
-function openGPanel() { closeSPanel(); closeXPanel(); closeHPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
+function openGPanel() { closeSPanel(); closeXPanel(); closeHPanel(); closeTPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
 function closeGPanel() { $('gpanel').classList.remove('open'); }
 
 async function toggleTask(listId, taskId, completed) {
@@ -4004,7 +4455,7 @@ async function loadSStatus() {
 }
 
 async function openSPanel() {
-  closePanel(); closeGPanel(); closeXPanel(); closeHPanel();
+  closePanel(); closeGPanel(); closeXPanel(); closeHPanel(); closeTPanel();
   $('spanel').classList.add('open');
   renderSChat();
   // 開くたびにサーバーから最新履歴を取得(他端末での会話を反映)。

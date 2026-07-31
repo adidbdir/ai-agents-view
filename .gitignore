@@ -8,4 +8,5 @@ anthropic-credentials.json
 explorer-state.json
 secretary-state.json
 hustler-config.json
+trader-config.json
 data/
