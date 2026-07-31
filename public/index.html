@@ -161,6 +161,30 @@
   @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
   .blink  { animation: blink 1.6s ease-in-out infinite; }
   .blink2 { animation: blink 1.6s ease-in-out infinite; animation-delay: .8s; }
+  @keyframes tailSwish { 0%,100% { transform: rotate(-5deg); } 50% { transform: rotate(7deg); } }
+  .tail-swish { transform-origin: 10% 80%; transform-box: fill-box; animation: tailSwish 2.8s ease-in-out infinite; }
+  .tail-swish.alt { animation-duration: 3.4s; }
+  @keyframes earFlick {
+    0%, 84%, 100% { transform: rotate(0deg); }
+    88% { transform: rotate(-8deg) translateY(-.4px); }
+    92% { transform: rotate(7deg) translateY(.1px); }
+  }
+  .ear-flick { transform-origin: center bottom; transform-box: fill-box; animation: earFlick 5.8s ease-in-out infinite; }
+  @keyframes doze { 0%,100% { transform: scale(1) translateY(0); } 50% { transform: scale(1.02,.98) translateY(.8px); } }
+  .cat-doze { transform-origin: center; transform-box: fill-box; animation: doze 3.8s ease-in-out infinite; }
+  @keyframes groomNod {
+    0%,100% { transform: rotate(0deg) translateY(0); }
+    35% { transform: rotate(-10deg) translateY(-1.5px); }
+    70% { transform: rotate(5deg) translateY(.6px); }
+  }
+  .cat-groom { transform-origin: center; transform-box: fill-box; animation: groomNod 1.4s ease-in-out infinite; }
+  @keyframes walkStep {
+    0%,100% { transform: translateY(0) rotate(7deg); }
+    50% { transform: translateY(.6px) rotate(-7deg); }
+  }
+  .step-a, .step-b { transform-origin: center top; transform-box: fill-box; animation: walkStep .55s ease-in-out infinite; }
+  .step-b { animation-delay: -.27s; }
+  .ambient-layer, .ambient-layer * { pointer-events: none; }
 
   /* ── 詳細パネル ─────────────────────────────── */
   .panel {
@@ -637,6 +661,15 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+function hashString(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
 
 /* ══════════ アイソメトリック投影 ══════════ */
 const VIEW = { w: 1400, h: 860 };
@@ -791,54 +824,256 @@ function tilePath(w, hh) {
   return `M${-w},0 L0,${-hh} L${w},0 L0,${hh} Z`;
 }
 
-/* 人物(足元が原点)。pose: 'stand' | 'work' | 'present' */
-function person(opts = {}) {
-  const {
-    pose = 'stand', suit = '#2c4157', shirt = '#d9e9f4',
-    skin = '#f2c9a2', hair = '#26343f', flip = false, anim = null,
-  } = opts;
-  const outer = el('g', { transform: flip ? 'scale(-1,1)' : '' });
-  const g = el('g', anim ? { class: anim } : {});
-  outer.appendChild(el('ellipse', { cx: 0, cy: 1.5, rx: 10, ry: 3.2, fill: '#31424f', opacity: .16 }));
+const CAT_COATS = {
+  orangeTabby: { body: '#d59a57', chest: '#f6e7d3', stripe: '#9f5e2b', ear: '#e6b49d', eye: '#9db565', nose: '#b98383', pattern: 'tabby' },
+  brownTabby:  { body: '#8d715f', chest: '#efe0d5', stripe: '#3d3029', ear: '#d9aa98', eye: '#a4b669', nose: '#b98586', pattern: 'tabby' },
+  grayTabby:   { body: '#9ea8b3', chest: '#f3f5f7', stripe: '#5c6670', ear: '#ddb5a8', eye: '#a8bd74', nose: '#c08f93', pattern: 'tabby' },
+  tuxedo:      { body: '#20242b', chest: '#f8fafb', stripe: '#11151a', ear: '#ddb8ae', eye: '#a7c36d', nose: '#c38f93', pattern: 'tuxedo' },
+  calico:      { body: '#f3f1ea', chest: '#fffaf2', stripe: '#ca8750', patch2: '#26211f', ear: '#e0b19f', eye: '#9db36b', nose: '#bb8889', pattern: 'calico' },
+  siamese:     { body: '#eadfc8', chest: '#f7efdc', stripe: '#6a5040', ear: '#d6a69d', eye: '#7cb0c5', nose: '#9c7673', pattern: 'siamese' },
+  black:       { body: '#232831', chest: '#3a414a', stripe: '#11151a', ear: '#d3a59c', eye: '#a5bc6f', nose: '#ba888c', pattern: 'solid' },
+  white:       { body: '#f7f8f5', chest: '#ffffff', stripe: '#d8dde3', ear: '#e6bbb2', eye: '#a5bc71', nose: '#c3959a', pattern: 'solid' },
+};
+const CAT_COAT_KEYS = Object.keys(CAT_COATS);
 
-  // 脚
-  if (pose === 'stand' || pose === 'present') {
-    g.appendChild(el('rect', { x: -5.5, y: -17, width: 4.6, height: 17, rx: 2, fill: '#232f3c' }));
-    g.appendChild(el('rect', { x: 1, y: -17, width: 4.6, height: 17, rx: 2, fill: '#2b3947' }));
-  } else if (pose === 'work') {
-    // 着席(脚は椅子と一体で簡略化)
-    g.appendChild(el('rect', { x: -7, y: -14, width: 14, height: 9, rx: 3, fill: '#232f3c' }));
+function catCoatKey(seed) {
+  return CAT_COAT_KEYS[hashString(String(seed || 'cat')) % CAT_COAT_KEYS.length];
+}
+function catCoat(seed) {
+  if (typeof seed === 'string' && CAT_COATS[seed]) return CAT_COATS[seed];
+  return CAT_COATS[catCoatKey(seed)];
+}
+function catAnimStyle(seed, salt, duration, spread = 1.2) {
+  const h = hashString(`${seed}:${salt}`);
+  const delay = ((h % 1500) / 100).toFixed(2);
+  const dur = (duration + (((h >> 11) % 100) / 100) * spread).toFixed(2);
+  return `animation-delay:-${delay}s;animation-duration:${dur}s;`;
+}
+function catEyePath(cx, cy, dir = 1) {
+  return `M${(cx - 2.8).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy - 1.7).toFixed(1)} ${(cx + 2.8).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy + 1.2).toFixed(1)} ${(cx - 2.8).toFixed(1)},${cy.toFixed(1)} Z`;
+}
+function catCoatKeyForProject(p) {
+  return catCoatKey(`project:${p.id || p.dirName || p.name || ''}`);
+}
+function catPawPath(x1, y1, x2, y2, cls = '') {
+  return el('path', {
+    d: `M${x1},${y1} Q${((x1 + x2) / 2).toFixed(1)},${(Math.min(y1, y2) - 2.8).toFixed(1)} ${x2},${y2}`,
+    stroke: '#d6c4b4', 'stroke-width': 3.4, 'stroke-linecap': 'round', fill: 'none', class: cls,
+  });
+}
+function catPatternLayers(coat, pose) {
+  const nodes = [];
+  if (coat.pattern === 'tabby') {
+    nodes.push(el('path', {
+      d: pose === 'walk'
+        ? 'M-8,-20 c2,-2 3,-4 2,-8 M-1,-22 c2,-2 3,-4 2,-8 M6,-21 c2,-2 3,-4 2,-8'
+        : 'M-7,-20 c2,-3 3,-7 1,-11 M0,-23 c2,-3 3,-7 1,-11 M7,-21 c2,-3 3,-7 1,-10',
+      stroke: coat.stripe, 'stroke-width': 1.8, 'stroke-linecap': 'round', fill: 'none', opacity: .88,
+    }));
+    nodes.push(el('path', {
+      d: 'M-3,-33 l-2,-3 M0,-34 l0,-3.5 M3,-33 l2,-3',
+      stroke: coat.stripe, 'stroke-width': 1.4, 'stroke-linecap': 'round', fill: 'none', opacity: .82,
+    }));
+  } else if (coat.pattern === 'tuxedo') {
+    nodes.push(el('path', {
+      d: 'M-4,-31 C-2,-34 2,-34 4,-31 C2,-27 -2,-27 -4,-31 Z',
+      fill: coat.chest, opacity: .96,
+    }));
+  } else if (coat.pattern === 'calico') {
+    nodes.push(el('ellipse', { cx: -4.5, cy: -21, rx: 4.2, ry: 5.1, fill: coat.stripe, opacity: .96 }));
+    nodes.push(el('ellipse', { cx: 6.8, cy: -16, rx: 4.8, ry: 4.2, fill: coat.patch2, opacity: .94 }));
+  } else if (coat.pattern === 'siamese') {
+    nodes.push(el('path', {
+      d: 'M-6.5,-32 C-4.4,-35.6 4.4,-35.6 6.5,-32 C4.7,-28.1 -4.7,-28.1 -6.5,-32 Z',
+      fill: coat.stripe, opacity: .94,
+    }));
+    nodes.push(el('path', {
+      d: 'M-8,-4 h4 M4,-4 h4',
+      stroke: coat.stripe, 'stroke-width': 2.8, 'stroke-linecap': 'round', opacity: .9,
+    }));
+  } else if (coat.pattern === 'solid' && coat.stripe) {
+    nodes.push(el('path', {
+      d: 'M-9,-15 C-3,-20 2,-20 9,-15',
+      stroke: coat.stripe, 'stroke-width': 1.4, 'stroke-linecap': 'round', fill: 'none', opacity: .28,
+    }));
   }
-  // 胴体(スーツ)
-  g.appendChild(el('path', {
-    d: 'M-8,-37 Q0,-41.5 8,-37 L6.6,-15.5 L-6.6,-15.5 Z', fill: suit,
-  }));
-  // シャツ襟元
-  g.appendChild(el('path', { d: 'M-2.6,-37.5 L0,-30.5 L2.6,-37.5 Z', fill: shirt }));
-  // 腕
-  if (pose === 'present') {
-    g.appendChild(el('path', { d: 'M-7,-35 C-10,-30 -10.5,-24 -9.5,-19', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7,-35 C12,-37 16,-40 19,-43', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('circle', { cx: 20, cy: -44, r: 2.4, fill: skin }));
-  } else if (pose === 'work') {
-    g.appendChild(el('path', { d: 'M-7,-34 C-10,-30 -9,-26 -5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7,-34 C10,-30 9,-26 5,-23', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-  } else {
-    g.appendChild(el('path', { d: 'M-7.5,-35 C-10,-29 -10.5,-23 -9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
-    g.appendChild(el('path', { d: 'M7.5,-35 C10,-29 10.5,-23 9.8,-18.5', stroke: suit, 'stroke-width': 4, 'stroke-linecap': 'round', fill: 'none' }));
+  return nodes;
+}
+function catAccessoryNodes(accessory, coat) {
+  const parts = [];
+  const accs = Array.isArray(accessory) ? accessory : (accessory ? [accessory] : []);
+  for (const acc of accs) {
+    if (acc === 'secretary') {
+      parts.push(el('path', { d: 'M-3.4,6 Q0,9.4 3.4,6 L0,10.2 Z', fill: '#cc4c55' }));
+      parts.push(el('path', { d: 'M-5,-2.8 h3.8 a1.9,1.9 0 0 1 0,3.8 h-3.8 a1.9,1.9 0 0 1 0,-3.8 Z M1.2,-2.8 h3.8 a1.9,1.9 0 0 1 0,3.8 h-3.8 a1.9,1.9 0 0 1 0,-3.8 Z M-1.2,-.9 h2.4', fill: 'none', stroke: '#55677a', 'stroke-width': 1 }));
+    } else if (acc === 'explorer') {
+      parts.push(el('path', { d: 'M-6.4,5.2 Q0,8.7 6.4,5.2 L5,8.8 Q0,10.2 -5,8.8 Z', fill: '#c97a43', stroke: '#9a5628', 'stroke-width': .8 }));
+      parts.push(el('path', { d: 'M5,8.4 l3.1,2.2', stroke: '#9a5628', 'stroke-width': .9, 'stroke-linecap': 'round' }));
+    }
   }
-  // 頭・髪
-  g.appendChild(el('circle', { cx: 0, cy: -45.5, r: 6.2, fill: skin }));
-  g.appendChild(el('path', { d: 'M-6.2,-46.5 a6.2,6.2 0 0 1 12.4,0 l-1.5,1 a5,4.6 0 0 0 -9.4,0 Z', fill: hair }));
-  outer.appendChild(g);
+  return parts;
+}
+
+/* 猫(足元が原点)。pose: 'stand' | 'work' | 'walk' | 'sleep' | 'present' */
+function cat(opts = {}) {
+  const {
+    pose = 'stand',
+    coat: coatSeed = 'grayTabby',
+    flip = false,
+    anim = null,
+    accessory = null,
+    seed = String(coatSeed || pose || 'cat'),
+    groom = false,
+  } = opts;
+  const coat = catCoat(coatSeed);
+  const outer = el('g');
+  const shadow = pose === 'sleep'
+    ? el('ellipse', { cx: 0, cy: 1.6, rx: 15, ry: 4.3, fill: '#31424f', opacity: .14 })
+    : el('ellipse', { cx: 0, cy: 1.5, rx: pose === 'walk' ? 12.5 : 10.5, ry: 3.2, fill: '#31424f', opacity: .15 });
+  outer.appendChild(shadow);
+
+  const motionClass = [anim, pose === 'sleep' ? 'cat-doze' : '', groom ? 'cat-groom' : ''].filter(Boolean).join(' ');
+  const motion = el('g', motionClass ? { class: motionClass } : {});
+  const facing = el('g', flip ? { transform: 'scale(-1,1)' } : {});
+  motion.appendChild(facing);
+  outer.appendChild(motion);
+
+  if (pose === 'sleep') {
+    facing.appendChild(el('path', {
+      d: 'M-13,-8 C-14,-18 -4,-24 6,-21 C14,-18 16,-9 12,-3 C8,3 -4,4 -10,0 C-12,-1 -13,-4 -13,-8 Z',
+      fill: coat.body,
+    }));
+    facing.appendChild(el('path', { d: 'M-4,-15 C0,-18 6,-17 8,-12 C6,-7 0,-6 -5,-8 C-6,-10 -6,-12 -4,-15 Z', fill: coat.chest, opacity: .96 }));
+    for (const n of catPatternLayers(coat, pose)) facing.appendChild(n);
+    const tail = el('path', {
+      d: 'M-11,-5 C-18,-8 -19,-18 -10,-19 C-3,-20 0,-12 -3,-7',
+      stroke: coat.pattern === 'siamese' ? coat.stripe : coat.body,
+      'stroke-width': 5.2, 'stroke-linecap': 'round', fill: 'none', class: 'tail-swish alt',
+      style: catAnimStyle(seed, 'tail', 3.4, .8),
+    });
+    facing.appendChild(tail);
+    facing.appendChild(el('circle', { cx: 8.5, cy: -11, r: 5.2, fill: coat.body }));
+    facing.appendChild(el('path', { d: 'M4.8,-14.3 L7.4,-20.2 L9.3,-14.8 Z M8.3,-15.1 L11.6,-20.6 L13.3,-14.6 Z', fill: coat.pattern === 'siamese' ? coat.stripe : coat.body }));
+    facing.appendChild(el('path', { d: 'M6.1,-16.1 L7.4,-18.9 L8.2,-16.6 M9.4,-16.7 L11.1,-19.2 L11.8,-16.5', fill: coat.ear, opacity: .9 }));
+    facing.appendChild(el('path', { d: 'M6.6,-9.8 Q8.5,-8.4 10.4,-9.8 Q8.5,-8.2 6.6,-9.8 Z', fill: coat.chest }));
+    facing.appendChild(el('path', { d: 'M6.3,-11.4 q1.5,-.8 3,0 M8.3,-11.5 q1.5,-.8 3,0', stroke: '#26313a', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none' }));
+    facing.appendChild(el('path', { d: 'M8.6,-9.6 l-.6,1.1 h1.2 Z', fill: coat.nose }));
+    facing.appendChild(el('path', { d: 'M6.6,-8.9 l-3.8,-.5 M10.4,-8.9 l3.8,-.4', stroke: '#9aa7b2', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none', opacity: .92 }));
+    for (const n of catAccessoryNodes(accessory, coat)) facing.appendChild(n);
+    return outer;
+  }
+
+  let bodyD = 'M-11,-8 C-13,-18 -8,-27 1,-28 C11,-29 16,-22 15,-11 C14,-4 9,0 1,0 C-5,0 -9,-3 -11,-8 Z';
+  let chestD = 'M-2,-25 C-6,-21 -6,-11 -4,-5 C-1,-.2 4,-.2 6,-6 C8,-12 7,-20 3,-25 Z';
+  let tailD = 'M10,-20 C20,-28 24,-18 20,-8 C18,-2 24,3 31,-1';
+  let frontPaws = [
+    catPawPath(-4, -9, -4, -.3, pose === 'walk' ? 'step-a' : ''),
+    catPawPath(3, -9, 3, -.3, pose === 'walk' ? 'step-b' : ''),
+  ];
+  let hindMarks = [
+    el('ellipse', { cx: -6.8, cy: -1.1, rx: 3.1, ry: 1.8, fill: coat.chest, opacity: .9 }),
+    el('ellipse', { cx: 6.5, cy: -1.1, rx: 3.1, ry: 1.8, fill: coat.chest, opacity: .9 }),
+  ];
+  let headX = 1.2, headY = -31.4, tailCls = 'tail-swish', closedEyes = groom;
+
+  if (pose === 'work') {
+    bodyD = 'M-12,-8 C-13,-18 -8,-26 1,-27 C11,-28 16,-21 15,-11 C14,-4 8,-1 1,-1 C-4,-1 -9,-3 -12,-8 Z';
+    chestD = 'M-1,-24 C-5,-20 -5,-12 -3,-6 C0,-2 4,-2 6,-7 C7,-12 6,-19 3,-24 Z';
+    tailD = 'M11,-19 C19,-28 23,-19 20,-11 C18,-5 22,0 28,-3';
+    frontPaws = [catPawPath(-3, -12, -11, -18.2), catPawPath(3, -12, 1, -18.6)];
+    hindMarks = [
+      el('ellipse', { cx: -5.8, cy: -.7, rx: 3, ry: 1.7, fill: coat.chest, opacity: .9 }),
+      el('ellipse', { cx: 4.8, cy: -.7, rx: 2.8, ry: 1.6, fill: coat.chest, opacity: .9 }),
+    ];
+    headX = 4.7; headY = -32.2;
+  } else if (pose === 'walk') {
+    bodyD = 'M-13,-10 C-11,-20 -2,-26 9,-24 C16,-23 20,-17 20,-10 C20,-3 15,0 7,0 C-1,0 -8,-3 -13,-10 Z';
+    chestD = 'M-2,-22 C1,-23 6,-22 7,-18 C6,-11 3,-7 -1,-6 C-5,-7 -6,-12 -5,-18 C-4,-20 -3,-21 -2,-22 Z';
+    tailD = 'M15,-18 C25,-26 31,-18 29,-8 C28,-1 34,2 39,-3';
+    frontPaws = [
+      catPawPath(-4, -9, -7, .1, 'step-a'),
+      catPawPath(4, -9, 7, -.7, 'step-b'),
+      catPawPath(9, -8, 13, -.1, 'step-b'),
+      catPawPath(1, -8, -1, .4, 'step-a'),
+    ];
+    hindMarks = [];
+    headX = 10.6; headY = -28.5; tailCls = 'tail-swish alt';
+  } else if (pose === 'present') {
+    bodyD = 'M-9,-6 C-10,-18 -6,-30 0,-33 C7,-30 10,-18 9,-6 C8,1 5,5 0,5 C-5,5 -8,1 -9,-6 Z';
+    chestD = 'M-2,-27 C-5,-20 -4,-8 -1,-1 C1,2 4,2 6,-1 C8,-8 7,-20 3,-27 Z';
+    tailD = 'M8,-18 C17,-24 22,-15 20,-7 C18,-1 23,5 29,3';
+    frontPaws = [
+      el('path', { d: 'M-4,-20 Q-7,-14 -6,-7', stroke: '#d6c4b4', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }),
+      el('path', { d: 'M4,-22 Q11,-26 18,-34', stroke: '#d6c4b4', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }),
+    ];
+    hindMarks = [
+      el('ellipse', { cx: -3.8, cy: 4.5, rx: 2.6, ry: 1.7, fill: coat.chest, opacity: .92 }),
+      el('ellipse', { cx: 3.8, cy: 4.5, rx: 2.6, ry: 1.7, fill: coat.chest, opacity: .92 }),
+    ];
+    headX = 1.2; headY = -37;
+  }
+
+  const tail = el('path', {
+    d: tailD,
+    stroke: coat.pattern === 'siamese' ? coat.stripe : coat.body,
+    'stroke-width': pose === 'walk' ? 4.8 : 5.2,
+    'stroke-linecap': 'round',
+    fill: 'none',
+    class: tailCls,
+    style: catAnimStyle(seed, 'tail', pose === 'walk' ? 2.4 : 2.9),
+  });
+  facing.appendChild(tail);
+  facing.appendChild(el('path', { d: bodyD, fill: coat.body }));
+  facing.appendChild(el('path', { d: chestD, fill: coat.chest, opacity: .97 }));
+  for (const n of catPatternLayers(coat, pose)) facing.appendChild(n);
+  for (const paw of frontPaws) facing.appendChild(paw);
+  for (const paw of hindMarks) facing.appendChild(paw);
+
+  const head = el('g', { transform: `translate(${headX},${headY})` });
+  const earL = el('path', {
+    d: 'M-6,-2 L-3.6,-9.3 L-1,-2.6 Z',
+    fill: coat.pattern === 'siamese' ? coat.stripe : coat.body,
+    class: 'ear-flick',
+    style: catAnimStyle(seed, 'earL', 5.5),
+  });
+  const earR = el('path', {
+    d: 'M1,-2.6 L3.7,-9.1 L6,-2 Z',
+    fill: coat.pattern === 'siamese' ? coat.stripe : coat.body,
+    class: 'ear-flick',
+    style: catAnimStyle(seed, 'earR', 6.1),
+  });
+  head.appendChild(earL);
+  head.appendChild(earR);
+  head.appendChild(el('path', { d: 'M-4.7,-3.1 L-3.4,-6.5 L-2.2,-3.9 M2.1,-3.9 L3.4,-6.5 L4.8,-3.2', fill: coat.ear, opacity: .92 }));
+  head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 7.2, ry: 6.1, fill: coat.body }));
+  head.appendChild(el('path', { d: 'M-4.6,2.4 C-2.1,5 2.1,5 4.6,2.4 C2.5,.2 -2.5,.2 -4.6,2.4 Z', fill: coat.chest }));
+  if (pose !== 'sleep') {
+    if (closedEyes) {
+      head.appendChild(el('path', { d: 'M-4.5,-1.6 q1.7,-.8 3.2,0 M1.4,-1.6 q1.7,-.8 3.2,0', stroke: '#26313a', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none' }));
+    } else {
+      head.appendChild(el('path', { d: catEyePath(-2.8, -1.4) + ' ' + catEyePath(2.8, -1.4), fill: coat.eye }));
+      head.appendChild(el('ellipse', { cx: -2.8, cy: -1.3, rx: .75, ry: 1.9, fill: '#1b2128' }));
+      head.appendChild(el('ellipse', { cx: 2.8, cy: -1.3, rx: .75, ry: 1.9, fill: '#1b2128' }));
+    }
+  }
+  head.appendChild(el('path', { d: 'M0,-.2 l-1.1,1.6 h2.2 Z', fill: coat.nose }));
+  head.appendChild(el('path', { d: 'M0,1.4 q-1.2,1.1 -2.2,1.2 M0,1.4 q1.2,1.1 2.2,1.2', stroke: '#714f4c', 'stroke-width': .75, 'stroke-linecap': 'round', fill: 'none', opacity: .85 }));
+  head.appendChild(el('path', { d: 'M-4.8,1.4 l-5.2,-1 M-4.8,2.8 l-5.5,.8', stroke: '#9aa7b2', 'stroke-width': .82, 'stroke-linecap': 'round', fill: 'none', opacity: .9 }));
+  head.appendChild(el('path', { d: 'M4.8,1.4 l5.2,-1 M4.8,2.8 l5.5,.8', stroke: '#9aa7b2', 'stroke-width': .82, 'stroke-linecap': 'round', fill: 'none', opacity: .9 }));
+  for (const n of catAccessoryNodes(accessory, coat)) head.appendChild(n);
+  if (groom) head.appendChild(el('path', { d: 'M-3,4 q-2,3 -6,4', stroke: '#d6c4b4', 'stroke-width': 3, 'stroke-linecap': 'round', fill: 'none' }));
+  facing.appendChild(head);
+
   return outer;
 }
 
-/* ワークステーション(デスク+モニター+人物) */
+/* ワークステーション(デスク+モニター+猫) */
 function workstation(p) {
   const g = el('g', { class: 'node-g' });
   const active = p.status === 'active';
   const recent = p.status === 'recent';
+  const baseCoat = catCoatKeyForProject(p);
+  const projectSeed = p.id || p.dirName || p.name || 'project';
 
   // 床タイル
   g.appendChild(el('path', {
@@ -853,13 +1088,13 @@ function workstation(p) {
     }));
   }
 
-  // 人物(デスクの奥 = 先に描いて脚を隠す)
+  // 猫(デスクの奥 = 先に描いて足先を隠す)
   if (active) {
-    const pw = person({ pose: 'work', suit: '#20536b', shirt: '#bfeaf7', anim: 'bob' });
+    const pw = cat({ pose: 'work', coat: baseCoat, anim: 'bob', seed: `${projectSeed}:work` });
     pw.setAttribute('transform', 'translate(14,-30) scale(1.05)');
     g.appendChild(pw);
   } else if (recent) {
-    const ps = person({ pose: 'stand', suit: '#31567d' });
+    const ps = cat({ pose: 'stand', coat: baseCoat, seed: `${projectSeed}:recent` });
     ps.setAttribute('transform', 'translate(-52,4) scale(1.02)');
     g.appendChild(ps);
   }
@@ -872,12 +1107,11 @@ function workstation(p) {
     { x: -34, y: -34, flip: false, back: true },
     { x: 44,  y: 40, flip: true,  back: false },
   ];
-  const AGENT_SUITS = ['#3a6186', '#476383', '#24486b', '#31567d'];
   const agentsShown = Math.min(nAgents, AGENT_SPOTS.length);
   for (let i = 0; i < agentsShown; i++) {
     const sp = AGENT_SPOTS[i];
     if (!sp.back) continue; // 手前側はデスクの後に描く
-    const pa = person({ pose: 'stand', suit: AGENT_SUITS[i], anim: 'bob', flip: sp.flip });
+    const pa = cat({ pose: 'stand', coat: catCoatKey(`${projectSeed}:agent:${i}`), anim: 'bob', flip: sp.flip, seed: `${projectSeed}:agent:${i}` });
     pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
     g.appendChild(pa);
   }
@@ -888,7 +1122,7 @@ function workstation(p) {
   for (let i = 0; i < agentsShown; i++) {
     const sp = AGENT_SPOTS[i];
     if (sp.back) continue;
-    const pa = person({ pose: 'stand', suit: AGENT_SUITS[i], anim: 'bob', flip: sp.flip });
+    const pa = cat({ pose: 'stand', coat: catCoatKey(`${projectSeed}:agent:${i}`), anim: 'bob', flip: sp.flip, seed: `${projectSeed}:agent:${i}` });
     pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
     g.appendChild(pa);
   }
@@ -933,9 +1167,10 @@ function workstation(p) {
 function meetingTable() {
   const g = el('g');
   // ラグ
-  g.appendChild(el('path', { d: tilePath(120, 60), fill: '#e0f2f9', stroke: '#c3e7f3', 'stroke-width': 2, opacity: .85 }));
-  // 奥の人物
-  const pb = person({ pose: 'present', suit: '#2c4157', flip: true });
+  g.appendChild(el('path', { d: tilePath(122, 61), fill: '#dcebc9', stroke: '#c4d8aa', 'stroke-width': 2.2, opacity: .94 }));
+  g.appendChild(el('path', { d: tilePath(86, 43), fill: '#eaf4da', opacity: .7 }));
+  // 奥のプレゼン猫
+  const pb = cat({ pose: 'present', coat: 'grayTabby', flip: true, seed: 'meeting:presenter' });
   pb.setAttribute('transform', 'translate(46,-38) scale(1.0)');
   g.appendChild(pb);
   // テーブル(円柱)
@@ -946,11 +1181,20 @@ function meetingTable() {
   tb.appendChild(el('path', { d: 'M-14,-32 l12,-6 l10,5 l-12,6 Z', fill: '#2c4157' }));
   tb.appendChild(el('path', { d: 'M-14,-32 l-1,-9 l12,-6 l1,9 Z', fill: '#59d2f2' }));
   g.appendChild(tb);
-  // 手前の人物
-  const pf = person({ pose: 'stand', suit: '#24486b' });
+  // クッションベッドと昼寝猫
+  const bed = el('g', { transform: 'translate(-42,18)' });
+  bed.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 27, ry: 14, fill: '#c7d9b3', opacity: .28 }));
+  bed.appendChild(el('ellipse', { cx: 0, cy: -3.5, rx: 25, ry: 12.5, fill: '#f0ddc9', stroke: '#d5bba4', 'stroke-width': 2 }));
+  bed.appendChild(el('ellipse', { cx: 0, cy: -4, rx: 18, ry: 8.4, fill: '#f7efe6' }));
+  g.appendChild(bed);
+  const nap = cat({ pose: 'sleep', coat: 'calico', seed: 'meeting:nap' });
+  nap.setAttribute('transform', 'translate(-42,12) scale(.93)');
+  g.appendChild(nap);
+  // 手前の猫
+  const pf = cat({ pose: 'stand', coat: 'siamese', seed: 'meeting:front-left' });
   pf.setAttribute('transform', 'translate(-58,20) scale(1.05)');
   g.appendChild(pf);
-  const pf2 = person({ pose: 'stand', suit: '#2c4157', flip: true });
+  const pf2 = cat({ pose: 'stand', coat: 'tuxedo', flip: true, seed: 'meeting:front-right' });
   pf2.setAttribute('transform', 'translate(56,26) scale(1.05)');
   g.appendChild(pf2);
   return g;
@@ -969,10 +1213,10 @@ function whiteboard() {
   b.appendChild(el('path', { d: 'M8,-44 L22,-58', stroke: '#2c4157', 'stroke-width': 2.5, 'stroke-linecap': 'round' }));
   g.appendChild(b);
   // プレゼンター+聞き手
-  const pp = person({ pose: 'present', suit: '#2c4157' });
+  const pp = cat({ pose: 'present', coat: 'tuxedo', seed: 'whiteboard:presenter' });
   pp.setAttribute('transform', 'translate(-58,16) scale(1.02)');
   g.appendChild(pp);
-  const pl = person({ pose: 'stand', suit: '#3a6186', flip: true });
+  const pl = cat({ pose: 'stand', coat: 'orangeTabby', flip: true, seed: 'whiteboard:listener' });
   pl.setAttribute('transform', 'translate(-14,48) scale(1.0)');
   g.appendChild(pl);
   return g;
@@ -1004,6 +1248,18 @@ function plant() {
   return g;
 }
 
+/* 小さなキャットタワー */
+function catTower() {
+  const g = el('g');
+  g.appendChild(el('path', { d: tilePath(28, 14), fill: '#e9edf2', stroke: '#fff', 'stroke-width': 2, opacity: .88 }));
+  g.appendChild(isoBox(-2, -2, 18, 12, 8, '#ead9c6', '#d0b99f', '#c4ab8f'));
+  g.appendChild(el('rect', { x: -3, y: -44, width: 6, height: 32, rx: 3, fill: '#c8b398' }));
+  g.appendChild(el('ellipse', { cx: 0, cy: -47, rx: 13, ry: 5.5, fill: '#f0e2d0', stroke: '#d7c0a5', 'stroke-width': 1.5 }));
+  g.appendChild(el('rect', { x: 8, y: -28, width: 5, height: 16, rx: 2.5, fill: '#c8b398' }));
+  g.appendChild(el('ellipse', { cx: 10.5, cy: -30.5, rx: 8.5, ry: 4, fill: '#f3e7d6', stroke: '#dcc7af', 'stroke-width': 1.2 }));
+  return g;
+}
+
 /* コーヒーコーナー */
 function coffeeCorner() {
   const g = el('g');
@@ -1013,8 +1269,12 @@ function coffeeCorner() {
   g.appendChild(isoBox(-6, -21, 12, 10, 16, '#3d5266', '#24384d', '#1a2836'));
   // 湯気
   g.appendChild(el('path', { d: 'M6,-46 q3,-4 0,-8 q-3,-4 0,-8', stroke: '#b9c5d1', 'stroke-width': 2, fill: 'none', 'stroke-linecap': 'round', class: 'blink' }));
-  // 休憩中の人
-  const pc = person({ pose: 'stand', suit: '#476383', flip: true });
+  // 猫のフードボウル
+  g.appendChild(el('ellipse', { cx: 26, cy: 8.5, rx: 9, ry: 4.4, fill: '#c0d1de', opacity: .45 }));
+  g.appendChild(el('path', { d: 'M18,3 Q26,-2 34,3 L31,8 Q26,10 21,8 Z', fill: '#dbe6ee', stroke: '#aebecd', 'stroke-width': 1.4 }));
+  g.appendChild(el('path', { d: 'M22,5.2 q4,-2.2 8,0 q-4,2.1 -8,0 Z', fill: '#c9a36d', opacity: .9 }));
+  // 休憩中の猫
+  const pc = cat({ pose: 'stand', coat: 'black', flip: true, seed: 'coffee:cat' });
   pc.setAttribute('transform', 'translate(40,14) scale(.98)');
   g.appendChild(pc);
   return g;
@@ -1027,8 +1287,8 @@ function secretaryStation() {
   g.appendChild(el('path', { d: tilePath(70, 35), fill: '#f0eaf6', stroke: '#fff', 'stroke-width': 2.5 }));
   g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#c9a7e0', 'stroke-width': 2.5, class: 'pulse-ring' }));
 
-  // 着席した秘書(デスクの奥)
-  const ps = person({ pose: 'work', suit: '#6d4a86', shirt: '#efe4f6', hair: '#2a2431', anim: 'bob' });
+  // 着席した秘書猫(デスクの奥)
+  const ps = cat({ pose: 'work', coat: 'calico', accessory: 'secretary', anim: 'bob', seed: 'secretary' });
   ps.setAttribute('transform', 'translate(12,-30) scale(1.06)');
   g.appendChild(ps);
 
@@ -1081,16 +1341,11 @@ function explorerStation(unread) {
   tent.appendChild(flag);
   g.appendChild(tent);
 
-  // 探検家(立ち・探検帽)。帽子を頭に重ねるため person はアニメ無しで固定
+  // 探検家猫(バンダナ付き)
   const XT = 'translate(16,-2) scale(1.08)';
-  const ex = person({ pose: 'stand', suit: '#7d6a3a', shirt: '#e9e0c6', skin: '#eabf94', hair: '#3a2c1e' });
+  const ex = cat({ pose: 'stand', coat: 'brownTabby', accessory: 'explorer', seed: 'explorer' });
   ex.setAttribute('transform', XT);
   g.appendChild(ex);
-  const hat = el('g', { transform: XT });
-  hat.appendChild(el('ellipse', { cx: 0, cy: -49.5, rx: 11, ry: 3.4, fill: '#6b5a2f' }));       // つば
-  hat.appendChild(el('path', { d: 'M-6.6,-49.5 Q0,-61 6.6,-49.5 Z', fill: '#7d6a3a', stroke: '#5f5027', 'stroke-width': 1 })); // ドーム
-  hat.appendChild(el('rect', { x: -6.6, y: -52, width: 13.2, height: 2.6, rx: 1.2, fill: '#5f5027' }));  // バンド
-  g.appendChild(hat);
   // 双眼鏡を持つ手元(装飾)
   g.appendChild(el('rect', { x: 20, y: -34, width: 7, height: 4, rx: 1.5, fill: '#2f3a44', transform: 'rotate(-8 23 -32)' }));
 
@@ -1203,10 +1458,229 @@ function layoutProjects(projects) {
   return { cozy: false, placed };
 }
 
+const AMBIENT = {
+  layer: null,
+  cats: [],
+  obstacles: [],
+  points: [],
+  cozy: true,
+  lastTime: 0,
+  rafId: 0,
+  bed: { u: .41, v: .51 },
+};
+
+function uvBlocked(u, v, pad = .02) {
+  if (u < .04 || u > .96 || v < .04 || v > .96) return true;
+  return AMBIENT.obstacles.some((o) =>
+    u > o.u1 - pad && u < o.u2 + pad && v > o.v1 - pad && v < o.v2 + pad);
+}
+function segmentClear(u1, v1, u2, v2) {
+  for (let i = 1; i <= 8; i++) {
+    const t = i / 8;
+    if (uvBlocked(u1 + (u2 - u1) * t, v1 + (v2 - v1) * t, .016)) return false;
+  }
+  return true;
+}
+function ambientTransform(state) {
+  const pt = iso(state.u, state.v);
+  const sx = state.flip ? -state.scale : state.scale;
+  state.wrap.setAttribute('transform', `translate(${pt.x},${pt.y}) scale(${sx},${state.scale})`);
+}
+function setAmbientPose(state, pose, extra = {}) {
+  state.pose = pose;
+  state.groom = !!extra.groom;
+  state.wrap.replaceChildren(cat({
+    pose,
+    coat: state.coat,
+    seed: state.seed,
+    groom: state.groom,
+  }));
+  ambientTransform(state);
+}
+function ensureAmbientLayer() {
+  if (!AMBIENT.layer) {
+    AMBIENT.layer = el('g', { class: 'ambient-layer' });
+  }
+  if (!AMBIENT.cats.length) {
+    const seeds = [
+      { u: .27, v: .52, coat: 'orangeTabby' },
+      { u: .57, v: .26, coat: 'grayTabby' },
+      { u: .74, v: .58, coat: 'tuxedo' },
+    ];
+    AMBIENT.cats = seeds.map((cfg, i) => {
+      const wrap = el('g');
+      const state = {
+        id: i,
+        seed: `ambient:${i}`,
+        coat: cfg.coat,
+        wrap,
+        u: cfg.u,
+        v: cfg.v,
+        targetU: cfg.u,
+        targetV: cfg.v,
+        targetBed: false,
+        mode: 'walk',
+        pose: 'walk',
+        groom: false,
+        waitMs: 0,
+        speed: .05 + i * .007,
+        scale: .72 + i * .05,
+        flip: i % 2 === 1,
+      };
+      setAmbientPose(state, 'walk');
+      AMBIENT.layer.appendChild(wrap);
+      return state;
+    });
+  }
+  if (!AMBIENT.rafId) {
+    const frame = (ts) => {
+      if (!AMBIENT.lastTime) AMBIENT.lastTime = ts;
+      const dt = Math.min(80, ts - AMBIENT.lastTime);
+      AMBIENT.lastTime = ts;
+      if (!document.hidden) tickAmbient(dt);
+      AMBIENT.rafId = requestAnimationFrame(frame);
+    };
+    AMBIENT.rafId = requestAnimationFrame(frame);
+    document.addEventListener('visibilitychange', () => { AMBIENT.lastTime = 0; });
+  }
+  return AMBIENT.layer;
+}
+function chooseAmbientTarget(state, immediate = false) {
+  const candidates = [];
+  if (Math.random() < .22) candidates.push({ ...AMBIENT.bed, bed: true });
+  const shuffled = [...AMBIENT.points].sort(() => Math.random() - .5);
+  candidates.push(...shuffled);
+  for (let i = 0; i < 24; i++) {
+    candidates.push({
+      u: .08 + Math.random() * .84,
+      v: .08 + Math.random() * .84,
+      bed: false,
+    });
+  }
+  for (const c of candidates) {
+    if (uvBlocked(c.u, c.v, .018)) continue;
+    if (!segmentClear(state.u, state.v, c.u, c.v) && !c.bed) continue;
+    state.targetU = c.u;
+    state.targetV = c.v;
+    state.targetBed = !!c.bed;
+    state.mode = 'walk';
+    setAmbientPose(state, 'walk');
+    return;
+  }
+  if (immediate) {
+    state.targetU = clamp(state.u + (Math.random() - .5) * .1, .08, .92);
+    state.targetV = clamp(state.v + (Math.random() - .5) * .1, .08, .92);
+    state.targetBed = false;
+    state.mode = 'walk';
+    setAmbientPose(state, 'walk');
+  }
+}
+function settleAmbientCat(state) {
+  const r = Math.random();
+  if (state.targetBed || r < .28) {
+    state.mode = 'sleep';
+    state.waitMs = (state.targetBed ? 26000 : 14000) + Math.random() * 18000;
+    setAmbientPose(state, 'sleep');
+  } else if (r < .62) {
+    state.mode = 'groom';
+    state.waitMs = 4500 + Math.random() * 4500;
+    setAmbientPose(state, 'stand', { groom: true });
+  } else {
+    state.mode = 'sit';
+    state.waitMs = 2500 + Math.random() * 3500;
+    setAmbientPose(state, 'stand');
+  }
+}
+function tickAmbient(dt) {
+  for (const state of AMBIENT.cats) {
+    if (state.mode === 'walk') {
+      const du = state.targetU - state.u;
+      const dv = state.targetV - state.v;
+      const dist = Math.hypot(du, dv);
+      if (dist < .008) {
+        settleAmbientCat(state);
+        continue;
+      }
+      const step = Math.min(dist, state.speed * dt / 1000);
+      let nu = state.u + du / dist * step;
+      let nv = state.v + dv / dist * step;
+      if (uvBlocked(nu, nv, .014)) {
+        const su1 = state.u - dv / dist * step * 1.2;
+        const sv1 = state.v + du / dist * step * 1.2;
+        const su2 = state.u + dv / dist * step * 1.2;
+        const sv2 = state.v - du / dist * step * 1.2;
+        if (!uvBlocked(su1, sv1, .014)) {
+          nu = su1; nv = sv1;
+        } else if (!uvBlocked(su2, sv2, .014)) {
+          nu = su2; nv = sv2;
+        } else {
+          chooseAmbientTarget(state, true);
+          continue;
+        }
+      }
+      state.u = nu;
+      state.v = nv;
+      state.flip = du < 0;
+      ambientTransform(state);
+    } else {
+      state.waitMs -= dt;
+      if (state.waitMs <= 0) chooseAmbientTarget(state, true);
+    }
+  }
+  const ordered = [...AMBIENT.cats].sort((a, b) => a.v - b.v);
+  for (const state of ordered) AMBIENT.layer.appendChild(state.wrap);
+}
+function ambientObstacle(u, v, du, dv) {
+  return { u1: u - du, u2: u + du, v1: v - dv, v2: v + dv };
+}
+function updateAmbientScene(cozy, placed) {
+  const obstacles = [
+    ambientObstacle(.08, .08, .11, .1),
+    ambientObstacle(.90, .13, .11, .1),
+    ambientObstacle(.13, .34, .09, .08),
+    ambientObstacle(.46, .94, .09, .08),
+    ambientObstacle(.88, .72, .08, .08),
+    ambientObstacle(.88, .86, .08, .08),
+  ];
+  if (cozy) {
+    obstacles.push(ambientObstacle(.5, .5, .09, .09));
+  }
+  for (const { u, v, scale } of placed) {
+    const pad = cozy ? .12 : clamp(.055 * scale + .02, .045, .08);
+    obstacles.push(ambientObstacle(u, v, pad, pad));
+  }
+  AMBIENT.obstacles = obstacles;
+  AMBIENT.cozy = cozy;
+  AMBIENT.points = cozy
+    ? [
+        { u: .22, v: .44 }, { u: .38, v: .30 }, { u: .61, v: .30 },
+        { u: .76, v: .44 }, { u: .31, v: .73 }, { u: .67, v: .70 },
+        { u: .49, v: .60 }, { u: .53, v: .42 },
+      ]
+    : [
+        { u: .19, v: .20 }, { u: .33, v: .24 }, { u: .49, v: .22 }, { u: .66, v: .22 }, { u: .80, v: .23 },
+        { u: .20, v: .46 }, { u: .38, v: .48 }, { u: .57, v: .49 }, { u: .76, v: .49 },
+        { u: .22, v: .74 }, { u: .41, v: .76 }, { u: .61, v: .77 }, { u: .79, v: .76 },
+      ].filter((pt) => !uvBlocked(pt.u, pt.v, .015));
+  ensureAmbientLayer();
+  for (const state of AMBIENT.cats) {
+    if (uvBlocked(state.u, state.v, .02)) {
+      state.u = clamp(state.u, .09, .91);
+      state.v = clamp(state.v, .09, .91);
+    }
+    if (state.mode === 'walk' && (uvBlocked(state.targetU, state.targetV, .02) || Math.hypot(state.targetU - state.u, state.targetV - state.v) < .002)) {
+      chooseAmbientTarget(state, true);
+    }
+    ambientTransform(state);
+  }
+}
+
 /* ══════════ 描画 ══════════ */
 function render() {
   if (!DATA) return;
   const svg = $('stage');
+  const ambientLayer = ensureAmbientLayer();
+  if (ambientLayer.parentNode === svg) svg.removeChild(ambientLayer);
   applyView();
   svg.innerHTML = '';
   svg.appendChild(buildDefs());
@@ -1220,8 +1694,6 @@ function render() {
   const projects = isFinite(days)
     ? all.filter((p) => p.lastTs && now - Date.parse(p.lastTs) < days * 86400e3)
     : all;
-  const hidden = all.length - projects.length;
-
   const { cozy, placed } = layoutProjects(projects);
   const hub = iso(.5, .5);
 
@@ -1247,12 +1719,14 @@ function render() {
     { u: .46, v: .94, build: whiteboard },
     { u: .88, v: .72, build: serverRack },
     { u: .13, v: .34, build: coffeeCorner },
+    { u: .88, v: .86, build: catTower },
     { u: .07, v: .93, build: plant },
     { u: .93, v: .93, build: plant },
     { u: .07, v: .07, build: plant },
     { u: .93, v: .07, build: plant },
   ] : [
     { u: .04, v: .96, build: plant },
+    { u: .88, v: .86, build: catTower },
     { u: .96, v: .96, build: plant },
     { u: .04, v: .04, build: plant },
     { u: .96, v: .04, build: plant },
@@ -1299,6 +1773,8 @@ function render() {
 
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
+  updateAmbientScene(cozy, placed);
+  svg.appendChild(ambientLayer);
 
   renderStats(projects);
   $('updated').textContent = updatedLine();
