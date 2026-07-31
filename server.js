@@ -114,6 +114,9 @@ function parseSession(filePath, stat) {
     fileMtime: stat.mtimeMs,
     fileSize: stat.size,
     hourly: {},           // 'YYYY-MM-DDTHH' -> event count (タイムライン用)
+    tailKind: null,       // 末尾メッセージ種別: 'user' | 'assistant'(待ち状態判定用)
+    tailStop: null,       // 末尾 assistant の stop_reason ('end_turn' | 'tool_use' 等)
+    lastUserToolResult: false, // 末尾 user がツール結果か(承認待ち判定用)
   };
   Object.defineProperty(summary, 'usageEvents', { value: [], enumerable: false, writable: true });
 
@@ -141,6 +144,9 @@ function parseSession(filePath, stat) {
 
     if (o.type === 'user' && o.message) {
       summary.userMessages++;
+      summary.tailKind = 'user'; summary.tailStop = null;
+      summary.lastUserToolResult = Array.isArray(o.message.content)
+        && o.message.content.some((b) => b && b.type === 'tool_result');
       if (!o.isSidechain && isUserPrompt(o.message)) summary.promptCount++;
       if (!summary.firstPrompt && typeof o.message.content === 'string') {
         summary.firstPrompt = o.message.content.slice(0, 120);
@@ -152,6 +158,7 @@ function parseSession(filePath, stat) {
     } else if (o.type === 'assistant' && o.message) {
       summary.assistantMessages++;
       const m = o.message;
+      summary.tailKind = 'assistant'; summary.tailStop = m.stop_reason || null;
       if (m.model) summary.model = m.model;
       if (m.usage) {
         const outputTokens = m.usage.output_tokens || 0;
@@ -239,6 +246,25 @@ function sessionStatus(s, now) {
   return 'idle';
 }
 
+// この時間、Claude の応答が進まなければ「対応待ち(承認プロンプト等で停止)」とみなす。
+const APPROVAL_IDLE_MS = 15000;
+/**
+ * セッションが人の対応(承認プロンプト等)を待って停止しているか判定する。
+ * 手動承認の保留中は、保留中の tool_use が記録に書き出されないため、末尾は
+ * 直前の tool_result(user) のまま止まる。そこで「ツール実行が未完了のまま
+ * 一定時間 Claude の出力が進まない」状態を対応待ちとみなす:
+ *   - 末尾が assistant の未完了 tool_use のまま停止(自動承認だが長時間 等)
+ *   - 末尾が user のツール結果のまま無応答で停止(承認プロンプトの典型)
+ * いずれも「作業が途中で止まっている」ことを表す。end_turn(会話終了)は対象外。
+ */
+function sessionWaiting(s, now) {
+  const last = s.lastTs ? Date.parse(s.lastTs) : s.fileMtime;
+  if ((now - last) <= APPROVAL_IDLE_MS) return null;   // 実行中/生成中はまだ待ちとしない
+  if (s.tailKind === 'assistant' && s.tailStop === 'tool_use') return 'approval';
+  if (s.tailKind === 'user' && s.lastUserToolResult) return 'approval';
+  return null;
+}
+
 /** 全プロジェクトを走査して集計を返す */
 function collect() {
   const now = Date.now();
@@ -267,6 +293,8 @@ function collect() {
       try { stat = fs.statSync(fp); } catch { continue; }
       const s = parseSession(fp, stat);
       s.status = sessionStatus(s, now);
+      // 待ち状態は人が居る(active/recent)セッションのみ対象にする
+      s.waiting = (s.status === 'active' || s.status === 'recent') ? sessionWaiting(s, now) : null;
       s.agents = parseAgents(path.join(projDir, s.sessionId), now);
       s.totalAgents = s.agents.length;
       s.runningAgents = s.agents.filter((a) => a.running).length;
@@ -285,6 +313,9 @@ function collect() {
       sessionCount: sessions.length,
       status: sessions.some((s) => s.status === 'active') ? 'active'
         : sessions.some((s) => s.status === 'recent') ? 'recent' : 'idle',
+      // 待ち: 承認待ちを優先、次に入力待ち(手を上げる表示に使う)
+      waiting: sessions.some((s) => s.waiting === 'approval') ? 'approval'
+        : sessions.some((s) => s.waiting === 'input') ? 'input' : null,
       lastTs: sessions[0]?.lastTs || null,
       totalToolCalls: sessions.reduce((a, s) => a + s.totalToolCalls, 0),
       outputTokens: sessions.reduce((a, s) => a + s.outputTokens, 0),
