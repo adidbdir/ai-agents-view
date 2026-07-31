@@ -27,6 +27,9 @@ const HUSTLER_CONFIG_PATH = path.join(__dirname, 'hustler-config.json');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
 const HUSTLER_CHECK_MS = 10 * 60 * 1000;
 const HUSTLER_TOKEN_HEADROOM = 120000;
+const HUSTLER_JOB_TYPES = new Set(['article_draft', 'affiliate_article', 'sns_pack', 'idea_research', 'custom']);
+const HUSTLER_REVIEW_JOB_TYPES = new Set(['article_draft', 'affiliate_article']);
+const HUSTLER_PUBLISH_TARGETS = new Set(['zenn', 'generic', 'none']);
 
 /**
  * ピア(他のPCで動いている ai-agents-view)の一覧。
@@ -573,10 +576,18 @@ const DEFAULT_HUSTLER_CONFIG = {
     enabled: false,
     mode: 'zenn-git',
     repoPath: '',
+    genericRepoPath: '',
+    genericDir: 'content/posts',
+    genericFrontmatter: 'hugo',
     articleType: 'tech',
     price: 0,
     topics: [],
     publishedFlag: true,
+  },
+  affiliate: {
+    enabled: false,
+    disclosure: '※本記事にはアフィリエイトリンクが含まれます。',
+    links: [],
   },
 };
 
@@ -647,6 +658,66 @@ function uniqStrings(items, maxItems = 8, maxLength = 60) {
   return out;
 }
 
+function escapeRegExp(text) {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizePublishTarget(target, fallback = 'none') {
+  return HUSTLER_PUBLISH_TARGETS.has(target) ? target : fallback;
+}
+
+function defaultPublishTargetForType(type) {
+  if (type === 'affiliate_article') return 'generic';
+  if (type === 'article_draft') return 'zenn';
+  return 'none';
+}
+
+function requiresHustlerReview(type) {
+  return HUSTLER_REVIEW_JOB_TYPES.has(type);
+}
+
+function sanitizeAffiliateLink(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    label: typeof src.label === 'string' ? src.label.trim().slice(0, 120) : '',
+    url: typeof src.url === 'string' ? src.url.trim().slice(0, 2000) : '',
+    note: typeof src.note === 'string' ? src.note.trim().slice(0, 240) : '',
+  };
+}
+
+function sanitizeAffiliateConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const links = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(src.links) ? src.links : []) {
+    const link = sanitizeAffiliateLink(raw);
+    if (!link.label || !link.url) continue;
+    const key = normalizeTopicKey(link.label);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push(link);
+    if (links.length >= 50) break;
+  }
+  return {
+    enabled: !!src.enabled,
+    disclosure: typeof src.disclosure === 'string' && src.disclosure.trim()
+      ? src.disclosure.trim().slice(0, 300)
+      : DEFAULT_HUSTLER_CONFIG.affiliate.disclosure,
+    links,
+  };
+}
+
+function sanitizeGenericDir(raw) {
+  const src = typeof raw === 'string' ? raw.trim() : '';
+  const safe = src
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/(?:^|\/)\.\.(?=\/|$)/g, '')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  return safe || DEFAULT_HUSTLER_CONFIG.publish.genericDir;
+}
+
 function normalizeHustlerState(state, fallback = 'pending') {
   if (state === 'done') return 'approved';
   return HUSTLER_JOB_STATUSES.has(state) ? state : fallback;
@@ -693,8 +764,11 @@ function sanitizeHustlerPublishConfig(input) {
   const src = (input && typeof input === 'object') ? input : {};
   return {
     enabled: !!src.enabled,
-    mode: src.mode === 'zenn-git' ? 'zenn-git' : 'zenn-git',
+    mode: src.mode === 'generic-git' ? 'generic-git' : 'zenn-git',
     repoPath: typeof src.repoPath === 'string' ? src.repoPath.trim().slice(0, 1000) : '',
+    genericRepoPath: typeof src.genericRepoPath === 'string' ? src.genericRepoPath.trim().slice(0, 1000) : '',
+    genericDir: sanitizeGenericDir(src.genericDir),
+    genericFrontmatter: src.genericFrontmatter === 'jekyll' ? 'jekyll' : 'hugo',
     articleType: src.articleType === 'idea' ? 'idea' : 'tech',
     price: Math.max(0, Math.min(50000, Math.round(Number(src.price) || 0))),
     topics: uniqStrings(src.topics, 5, 40).map((s) => s.replace(/\s+/g, '-')),
@@ -731,6 +805,7 @@ function sanitizeHustlerConfig(input) {
     maxRevisions: Math.max(0, Math.min(5, Math.round(Number(src.maxRevisions) || DEFAULT_HUSTLER_CONFIG.maxRevisions))),
     autoFromExplorer: src.autoFromExplorer !== false,
     publish: sanitizeHustlerPublishConfig({ ...DEFAULT_HUSTLER_CONFIG.publish, ...(src.publish || {}) }),
+    affiliate: sanitizeAffiliateConfig({ ...DEFAULT_HUSTLER_CONFIG.affiliate, ...(src.affiliate || {}) }),
   };
 }
 
@@ -747,15 +822,18 @@ function saveHustlerConfig(config) {
 
 function normalizeHustlerJob(job) {
   if (!job || typeof job !== 'object') return null;
-  const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(job.type) ? job.type : 'custom';
+  const type = HUSTLER_JOB_TYPES.has(job.type) ? job.type : 'custom';
   const createdAt = typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString();
   const status = normalizeHustlerState(job.status, 'pending');
   const review = normalizeReviewPayload(job.review);
+  const publishTarget = normalizePublishTarget(job.publishTarget, defaultPublishTargetForType(type));
   return {
     id: typeof job.id === 'string' ? job.id : makeId('job'),
     type,
     topic: typeof job.topic === 'string' ? job.topic.slice(0, 500) : '',
     prompt: typeof job.prompt === 'string' ? job.prompt.slice(0, 12000) : '',
+    publishTarget,
+    affiliateLinkLabels: uniqStrings(job.affiliateLinkLabels, 20, 120),
     status,
     createdAt,
     startedAt: typeof job.startedAt === 'string' ? job.startedAt : null,
@@ -970,7 +1048,47 @@ function hustlerReviewSystemPrompt() {
   return `あなたは技術記事ドラフトの審査担当です。返答は JSON のみで、コードフェンス・前置き・補足説明を付けません。`;
 }
 
-function buildHustlerJobPrompt(job) {
+function resolveAffiliateLinksForJob(job, config, opts = {}) {
+  const affiliate = sanitizeAffiliateConfig(config && config.affiliate);
+  const allLinks = affiliate.links || [];
+  const requested = uniqStrings(job && job.affiliateLinkLabels, 20, 120);
+  if (!requested.length) return allLinks;
+  const map = new Map(allLinks.map((link) => [normalizeTopicKey(link.label), link]));
+  const missing = [];
+  const selected = [];
+  for (const label of requested) {
+    const hit = map.get(normalizeTopicKey(label));
+    if (!hit) missing.push(label);
+    else selected.push(hit);
+  }
+  if (missing.length && opts.strict) {
+    throw new Error(`affiliate リンクが見つかりません: ${missing.join(', ')}`);
+  }
+  return selected;
+}
+
+function buildAffiliateLinkPromptText(job, config) {
+  const affiliate = sanitizeAffiliateConfig(config && config.affiliate);
+  const selected = resolveAffiliateLinksForJob(job, config);
+  const links = selected.length ? selected : affiliate.links;
+  const modeLine = selected.length
+    ? '以下の指定リンクをすべて本文で自然に扱ってください。'
+    : '以下の候補リンクからテーマに本当に合うものだけを選び、本文で自然に扱ってください。';
+  const listText = links.length
+    ? links.map((link) => `- ${link.label}${link.note ? `: ${link.note}` : ''}`).join('\n')
+    : '- なし';
+  return {
+    affiliate,
+    selected,
+    links,
+    text: `${modeLine}
+
+使用可能なリンク一覧:
+${listText}`,
+  };
+}
+
+function buildHustlerJobPrompt(job, config) {
   const subject = (job.topic || job.prompt || '').trim();
   const explorerBits = job.type === 'article_draft' ? pickExplorerContext(subject) : [];
   const explorerText = explorerBits.length
@@ -1001,6 +1119,32 @@ Zenn / 技術ブログ向けの Markdown 記事ドラフトを作ってくださ
 出力ルール:
 - 記事末尾に 1 行だけ HTML コメントで次の形式を必ず追加する: <!-- HUSTLER_META {"title":"公開用タイトル","emoji":"📝","topics":["topic1","topic2"]} -->
 - title は実際に公開したい最有力タイトル1本、emoji は記事内容に合う絵文字1文字、topics は記事に合う短いトピックを最大5個${explorerText}`,
+      useResearch: false,
+    };
+  }
+  if (job.type === 'affiliate_article') {
+    const { affiliate, text } = buildAffiliateLinkPromptText(job, config);
+    return {
+      prompt: `テーマ: ${subject || '未指定'}
+
+読者の課題解決を最優先にした、日本語の比較 / レビュー記事を Markdown で作ってください。初心者にも判断材料が伝わるよう、メリットだけでなく向き・不向きや選び方まで書いてください。
+
+必須ルール:
+- 記事冒頭に次の開示文言を、この文面のまま必ず入れる: ${affiliate.disclosure}
+- 実URLは絶対に書かない。リンクは必ず {{aff:商品/サービス名}} のプレースホルダだけを使う
+- プレースホルダの label は下の一覧にある表記を1文字も変えない
+- 広告色を強くしすぎず、比較基準・向いている読者・注意点を具体的に書く
+- Markdown本文のみを出力する
+
+推奨構成:
+# タイトル
+導入
+比較ポイント
+候補ごとのレビュー
+選び方
+まとめ
+
+${text}`,
       useResearch: false,
     };
   }
@@ -1049,6 +1193,29 @@ Zenn / 技術ブログ向けの Markdown 記事ドラフトを作ってくださ
 }
 
 function buildHustlerReviewPrompt(job, content, qualityThreshold = 75) {
+  if (job.type === 'affiliate_article') {
+    return `次のアフィリエイト記事ドラフトを、日本語読者向けに厳しく審査してください。
+
+採点ルーブリック(合計100点):
+- 正確性
+- 読者課題への適合度
+- 比較 / レビューとしての具体性
+- 構成・読みやすさ
+- 広告臭が強すぎず、読者価値が十分にあるか
+- タイトル訴求力
+
+判定ルール:
+- ${qualityThreshold}点以上を合格候補として verdict を "pass"、未満を "revise" にしてください
+- strengths と issues はそれぞれ箇条書き文字列の配列
+- fixInstructions は、次回の書き直しにそのまま使える具体的な改善指示を 1 つの文字列で返してください
+- JSON 以外は返さない
+
+ジョブ種別: ${job.type}
+テーマ: ${(job.topic || job.prompt || '').trim() || '未指定'}
+
+ドラフト本文:
+${content}`;
+  }
   return `次の技術記事ドラフトを、日本語読者向けに厳しく審査してください。
 
 採点ルーブリック(各20点、合計100点):
@@ -1071,7 +1238,33 @@ function buildHustlerReviewPrompt(job, content, qualityThreshold = 75) {
 ${content}`;
 }
 
-function buildHustlerRevisionPrompt(job, draft, review, revisionCount) {
+function buildHustlerRevisionPrompt(job, draft, review, revisionCount, config) {
+  if (job.type === 'affiliate_article') {
+    const { affiliate, text } = buildAffiliateLinkPromptText(job, config);
+    return `次のアフィリエイト記事ドラフトを、日本語の比較 / レビュー記事として全面的に書き直してください。
+
+要件:
+- 元のテーマと読者層は維持する
+- 記事冒頭に次の開示文言を、この文面のまま必ず入れる: ${affiliate.disclosure}
+- 実URLは書かない。リンクは必ず {{aff:商品/サービス名}} 形式だけを使う
+- プレースホルダの label は一覧どおりに使う
+- 指摘をすべて反映し、広告臭を抑えつつ読者価値を増やす
+- 比較観点、向いている人、注意点、判断基準を具体化する
+- Markdown本文のみを出力する
+
+${text}
+
+今回の改善指示:
+${review && review.fixInstructions ? review.fixInstructions : '読者価値と比較の具体性を改善してください。'}
+
+主な課題:
+${(review && review.issues && review.issues.length) ? review.issues.map((x) => `- ${x}`).join('\n') : '- 特記事項なし'}
+
+元ドラフト:
+${draft}
+
+これは ${revisionCount} 回目のリライトです。出力は修正版 Markdown 本文のみ。`;
+  }
   return `次の技術記事ドラフトを、日本語の技術ブログ記事として全面的に書き直してください。
 
 要件:
@@ -1094,6 +1287,46 @@ ${draft}
 
 function stripHustlerMetaComment(md) {
   return String(md || '').replace(/\n?<!--\s*HUSTLER_META\s*(\{[\s\S]*?\})\s*-->\s*$/m, '').trim();
+}
+
+function ensureAffiliateDisclosure(body, disclosure) {
+  const text = String(disclosure || DEFAULT_HUSTLER_CONFIG.affiliate.disclosure).trim();
+  const clean = String(body || '').trim();
+  if (!text) return clean;
+  const headPattern = new RegExp(`^(?:${escapeRegExp(text)}\\s*)+`, 'u');
+  const withoutHead = clean.replace(headPattern, '').trim();
+  return withoutHead ? `${text}\n\n${withoutHead}` : text;
+}
+
+function replaceAffiliatePlaceholders(body, links) {
+  const map = new Map();
+  for (const link of Array.isArray(links) ? links : []) {
+    if (!link || !link.label || !link.url) continue;
+    map.set(normalizeTopicKey(link.label), link.url);
+  }
+  const unknown = new Set();
+  const replaced = String(body || '').replace(/\{\{\s*aff\s*:\s*([^}]+?)\s*\}\}/gi, (_all, rawLabel) => {
+    const label = String(rawLabel || '').trim();
+    const url = map.get(normalizeTopicKey(label));
+    if (!url) {
+      unknown.add(label);
+      return `{{aff:${label}}}`;
+    }
+    return url;
+  });
+  if (unknown.size) {
+    throw new Error(`未知の affiliate プレースホルダがあります: ${[...unknown].join(', ')}`);
+  }
+  return replaced;
+}
+
+function finalizeHustlerContentForStorage(job, content, config) {
+  const body = String(content || '').trim();
+  if (job.type !== 'affiliate_article') return body;
+  const affiliate = sanitizeAffiliateConfig(config && config.affiliate);
+  const selected = resolveAffiliateLinksForJob(job, config, { strict: true });
+  const links = selected.length ? selected : affiliate.links;
+  return replaceAffiliatePlaceholders(ensureAffiliateDisclosure(body, affiliate.disclosure), links);
 }
 
 function extractHustlerEmbeddedMeta(md) {
@@ -1172,13 +1405,16 @@ function normalizeHustlerOutputRecord(record) {
   const body = typeof record.body === 'string' ? record.body : '';
   const rawBody = typeof record.rawBody === 'string' ? record.rawBody : body;
   const cleanBody = stripHustlerMetaComment(body);
+  const type = HUSTLER_JOB_TYPES.has(record.type) ? record.type : 'custom';
   return {
     id: typeof record.id === 'string' ? record.id : makeId('out'),
-    type: ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(record.type) ? record.type : 'custom',
+    type,
     topic: typeof record.topic === 'string' ? record.topic : '',
     createdAt,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : createdAt,
     jobId: typeof record.jobId === 'string' ? record.jobId : null,
+    publishTarget: normalizePublishTarget(record.publishTarget, defaultPublishTargetForType(type)),
+    affiliateLinkLabels: uniqStrings(record.affiliateLinkLabels, 20, 120),
     state: normalizeHustlerState(record.state, 'approved'),
     history: normalizeStateHistory(record.history, record.state || 'approved', createdAt),
     review,
@@ -1235,6 +1471,8 @@ function createHustlerOutput(job, content, extra = {}) {
     createdAt,
     updatedAt: createdAt,
     jobId: job.id,
+    publishTarget: job.publishTarget,
+    affiliateLinkLabels: job.affiliateLinkLabels,
     state,
     history: appendStateHistory([], state, extra.note || '', createdAt),
     review: extra.review || null,
@@ -1296,6 +1534,7 @@ function listHustlerOutputs() {
         id: output.id,
         type: output.type,
         topic: output.topic,
+        publishTarget: output.publishTarget,
         createdAt: output.createdAt,
         updatedAt: output.updatedAt,
         jobId: output.jobId,
@@ -1327,6 +1566,8 @@ function getHustlerOutput(id) {
     updatedAt: output.updatedAt,
     jobId: output.jobId,
     body: output.body,
+    publishTarget: output.publishTarget,
+    affiliateLinkLabels: output.affiliateLinkLabels,
     state: output.state,
     score: output.score,
     verdict: output.verdict,
@@ -1371,9 +1612,11 @@ function hasUnfinishedHustlerJobForTopic(topic) {
 }
 
 function enqueueHustlerJob(input, opts = {}) {
-  const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(input && input.type) ? input.type : 'custom';
+  const type = HUSTLER_JOB_TYPES.has(input && input.type) ? input.type : 'custom';
   const topic = typeof input.topic === 'string' ? input.topic.trim().slice(0, 500) : '';
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim().slice(0, 12000) : '';
+  const publishTarget = normalizePublishTarget(input && input.publishTarget, defaultPublishTargetForType(type));
+  const affiliateLinkLabels = uniqStrings(input && input.affiliateLinkLabels, 20, 120);
   if (type === 'custom' ? !prompt : !topic) {
     throw new Error(type === 'custom' ? 'プロンプトを入力してください' : 'トピックを入力してください');
   }
@@ -1391,6 +1634,8 @@ function enqueueHustlerJob(input, opts = {}) {
     type,
     topic,
     prompt,
+    publishTarget,
+    affiliateLinkLabels,
     status: 'pending',
     createdAt,
     stateHistory: appendStateHistory([], 'pending', opts.note || '', createdAt),
@@ -1494,6 +1739,39 @@ function buildZennArticleContent(output, publishConfig, slug) {
   return { slug, title, emoji, topics, body, content: frontMatter.join('\n') };
 }
 
+function buildGenericArticleContent(output, publishConfig, slug) {
+  const title = deriveArticleTitle(output.rawBody, output.topic || '無題の記事');
+  const topics = uniqStrings(output.articleTopics || [], 5, 40)
+    .map((s) => s.replace(/\s+/g, '-'))
+    .slice(0, 5);
+  const date = new Date(output.publishedAt || output.updatedAt || output.createdAt || Date.now()).toISOString();
+  const body = extractPublishBodyFromDraft(output.rawBody || output.body);
+  const frontMatter = publishConfig.genericFrontmatter === 'jekyll'
+    ? [
+      '---',
+      'layout: post',
+      `title: ${JSON.stringify(title)}`,
+      `date: ${JSON.stringify(date)}`,
+      `tags: ${JSON.stringify(topics)}`,
+      '---',
+      '',
+      body,
+      '',
+    ]
+    : [
+      '---',
+      `title: ${JSON.stringify(title)}`,
+      `date: ${JSON.stringify(date)}`,
+      'draft: false',
+      `tags: ${JSON.stringify(topics)}`,
+      '---',
+      '',
+      body,
+      '',
+    ];
+  return { slug, title, topics, body, content: frontMatter.join('\n') };
+}
+
 function runSpawn(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     let child;
@@ -1524,21 +1802,33 @@ async function gitCommitMaybe(repoPath, message) {
   }
 }
 
+function resolvePublishTargetForRecord(record, config) {
+  const explicit = normalizePublishTarget(record && record.publishTarget, null);
+  if (explicit) return explicit;
+  if (record && record.type) return defaultPublishTargetForType(record.type);
+  const publishMode = sanitizeHustlerPublishConfig(config && config.publish).mode;
+  return publishMode === 'generic-git' ? 'generic' : 'zenn';
+}
+
 async function publishHustlerOutput(outputId, options = {}) {
   const config = sanitizeHustlerConfig(options.config || loadHustlerConfig());
   const publishConfig = config.publish || DEFAULT_HUSTLER_CONFIG.publish;
-  if (!publishConfig.repoPath) throw new Error('Zenn リポジトリパスが未設定です');
 
   const existing = readHustlerOutputRecord(outputId);
   if (!existing) throw new Error('成果物が見つかりません');
   if (existing.state !== 'approved') {
     throw new Error('approved 状態の成果物のみ公開できます');
   }
+  const publishTarget = resolvePublishTargetForRecord(existing, config);
+  if (publishTarget === 'none') throw new Error('この成果物は publishTarget=none のため公開できません');
+  if (publishTarget === 'zenn' && !publishConfig.repoPath) throw new Error('Zenn リポジトリパスが未設定です');
+  if (publishTarget === 'generic' && !publishConfig.genericRepoPath) throw new Error('generic リポジトリパスが未設定です');
 
   const attemptAt = new Date().toISOString();
   const slug = existing.slug || makeZennSlug();
   const updated = saveHustlerOutputRecord(transitionHustlerOutput(existing, 'approved', {
     slug,
+    publishTarget,
     publishAttemptedAt: attemptAt,
     publishError: null,
     updatedAt: attemptAt,
@@ -1546,6 +1836,7 @@ async function publishHustlerOutput(outputId, options = {}) {
   if (updated.jobId) {
     updateHustlerJobById(updated.jobId, (job) => transitionHustlerJob(job, 'approved', {
       slug,
+      publishTarget,
       publishError: null,
       score: updated.score,
       review: updated.review,
@@ -1553,24 +1844,30 @@ async function publishHustlerOutput(outputId, options = {}) {
     }, options.manual ? '手動公開を開始' : '自動公開を開始'));
   }
 
-  const repoPath = publishConfig.repoPath;
-  ensureDir(path.join(repoPath, 'articles'));
-  const article = buildZennArticleContent(updated, publishConfig, slug);
-  fs.writeFileSync(path.join(repoPath, 'articles', `${slug}.md`), article.content);
+  const repoPath = publishTarget === 'generic' ? publishConfig.genericRepoPath : publishConfig.repoPath;
+  const relativeFilePath = publishTarget === 'generic'
+    ? path.join(publishConfig.genericDir, `${slug}.md`)
+    : path.join('articles', `${slug}.md`);
+  ensureDir(path.join(repoPath, path.dirname(relativeFilePath)));
+  const article = publishTarget === 'generic'
+    ? buildGenericArticleContent(updated, publishConfig, slug)
+    : buildZennArticleContent(updated, publishConfig, slug);
+  fs.writeFileSync(path.join(repoPath, relativeFilePath), article.content);
 
   try {
-    await runSpawn('git', ['-C', repoPath, 'add', path.join('articles', `${slug}.md`)]);
+    await runSpawn('git', ['-C', repoPath, 'add', relativeFilePath]);
     await gitCommitMaybe(repoPath, `Publish ${slug}`);
     await runSpawn('git', ['-C', repoPath, 'push']);
     const publishedAt = new Date().toISOString();
     const out = saveHustlerOutputRecord(transitionHustlerOutput(updated, 'published', {
       slug,
+      publishTarget,
       publishedAt,
       publishAttemptedAt: attemptAt,
       publishError: null,
       articleTitle: article.title,
       articleTopics: article.topics,
-      emoji: article.emoji,
+      emoji: article.emoji || updated.emoji,
       updatedAt: publishedAt,
     }, options.manual ? '手動公開に成功' : '自動公開に成功'));
     if (out.jobId) {
@@ -1578,6 +1875,7 @@ async function publishHustlerOutput(outputId, options = {}) {
         outputId: out.id,
         finishedAt: publishedAt,
         slug,
+        publishTarget,
         publishedAt,
         publishError: null,
         score: out.score,
@@ -1589,6 +1887,7 @@ async function publishHustlerOutput(outputId, options = {}) {
     const errorText = String(e.message || e).slice(0, 500);
     const out = saveHustlerOutputRecord(transitionHustlerOutput(updated, 'approved', {
       slug,
+      publishTarget,
       publishAttemptedAt: attemptAt,
       publishError: errorText,
       updatedAt: new Date().toISOString(),
@@ -1597,6 +1896,7 @@ async function publishHustlerOutput(outputId, options = {}) {
       updateHustlerJobById(out.jobId, (job) => transitionHustlerJob(job, 'approved', {
         outputId: out.id,
         slug,
+        publishTarget,
         publishError: errorText,
         score: out.score,
         review: out.review,
@@ -1647,6 +1947,7 @@ function getHustlerStatus() {
     maxRevisions: config.maxRevisions,
     autoFromExplorer: config.autoFromExplorer,
     publish: config.publish,
+    affiliate: config.affiliate,
     canRun,
     pendingJobs,
     lastRun,
@@ -1669,6 +1970,11 @@ async function executeHustlerJob(jobId) {
   if (HUSTLER_RESTARTABLE_STATUSES.has(jobs[idx].status)) throw new Error('このジョブはすでに実行中です');
 
   const config = loadHustlerConfig();
+  if (jobs[idx].type === 'affiliate_article') {
+    if (!config.affiliate.enabled) throw new Error('affiliate 設定が無効です');
+    if (!config.affiliate.links.length) throw new Error('affiliate リンクが未設定です');
+    resolveAffiliateLinksForJob(jobs[idx], config, { strict: !!(jobs[idx].affiliateLinkLabels && jobs[idx].affiliateLinkLabels.length) });
+  }
   const startedAt = jobs[idx].startedAt || new Date().toISOString();
   jobs[idx] = transitionHustlerJob(jobs[idx], 'running', {
     startedAt,
@@ -1681,24 +1987,23 @@ async function executeHustlerJob(jobId) {
   hustlerRunning = true;
   try {
     let job = jobs[idx];
-    const task = buildHustlerJobPrompt(job);
-    const content = await generateHustlerContent(job, cfg, task);
-    let output = createHustlerOutput(job, content || '(成果物が空でした)', {
-      state: job.type === 'article_draft' ? 'evaluating' : 'approved',
-      note: job.type === 'article_draft' ? 'ドラフト生成完了' : '成果物生成完了',
+    const task = buildHustlerJobPrompt(job, config);
+    let draftForModel = String(await generateHustlerContent(job, cfg, task) || '(成果物が空でした)').trim();
+    let output = createHustlerOutput(job, finalizeHustlerContentForStorage(job, draftForModel, config), {
+      state: requiresHustlerReview(job.type) ? 'evaluating' : 'approved',
+      note: requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了',
     });
-    job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, job.type === 'article_draft' ? 'evaluating' : 'approved', {
+    job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, requiresHustlerReview(job.type) ? 'evaluating' : 'approved', {
       outputId: output.id,
       score: null,
       review: null,
       revisionCount: 0,
       error: null,
-      finishedAt: job.type === 'article_draft' ? null : output.createdAt,
-    }, job.type === 'article_draft' ? 'ドラフト生成完了' : '成果物生成完了')) || job;
+      finishedAt: requiresHustlerReview(job.type) ? null : output.createdAt,
+    }, requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了')) || job;
 
-    if (job.type !== 'article_draft') return job;
+    if (!requiresHustlerReview(job.type)) return job;
 
-    let draft = output.rawBody;
     for (let revisionIndex = 0; revisionIndex <= config.maxRevisions; revisionIndex++) {
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
         revisionCount: revisionIndex,
@@ -1709,7 +2014,7 @@ async function executeHustlerJob(jobId) {
         error: null,
       }, revisionIndex > 0 ? `リライト ${revisionIndex} 回目の評価` : '初回評価')) || job;
 
-      const review = await evaluateArticleDraft(job, stripHustlerMetaComment(draft), cfg, config.qualityThreshold);
+      const review = await evaluateArticleDraft(job, stripHustlerMetaComment(draftForModel), cfg, config.qualityThreshold);
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
         review,
         score: review.score,
@@ -1738,7 +2043,12 @@ async function executeHustlerJob(jobId) {
           finishedAt: approvedAt,
           publishError: null,
         }, `審査合格 ${review.score}点`)) || job;
-        if (config.publish.enabled && config.publish.repoPath) {
+        const autoPublishTarget = resolvePublishTargetForRecord(output, config);
+        const autoPublishReady = config.publish.enabled && (
+          (autoPublishTarget === 'zenn' && config.publish.repoPath)
+          || (autoPublishTarget === 'generic' && config.publish.genericRepoPath)
+        );
+        if (autoPublishReady) {
           try {
             await publishHustlerOutput(output.id, { config, manual: false });
           } catch (e) {
@@ -1779,17 +2089,17 @@ async function executeHustlerJob(jobId) {
         revisionCount: nextRevision,
       }, `リライト ${nextRevision} 回目`)) || job;
 
-      draft = await runHustlerTextTask({
+      draftForModel = String(await runHustlerTextTask({
         cfg,
         system: hustlerSystemPrompt(),
-        prompt: buildHustlerRevisionPrompt(job, stripHustlerMetaComment(draft), review, nextRevision),
+        prompt: buildHustlerRevisionPrompt(job, stripHustlerMetaComment(draftForModel), review, nextRevision, config),
         maxTokens: 2600,
-      });
+      }) || '(リライト結果が空でした)').trim();
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'revising', {
         review,
         score: review.score,
         revisionCount: nextRevision,
-        rawBody: draft || '(リライト結果が空でした)',
+        rawBody: finalizeHustlerContentForStorage(job, draftForModel, config),
       }, `リライト ${nextRevision} 回目完了`));
       job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'revising', {
         outputId: output.id,
@@ -2918,6 +3228,11 @@ module.exports = {
     extractPublishBodyFromDraft,
     makeZennSlug,
     buildZennArticleContent,
+    buildGenericArticleContent,
+    finalizeHustlerContentForStorage,
+    replaceAffiliatePlaceholders,
+    ensureAffiliateDisclosure,
+    resolvePublishTargetForRecord,
     maybeQueueHustlerFromExplorer,
     transitionHustlerJob,
     transitionHustlerOutput,

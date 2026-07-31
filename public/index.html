@@ -524,6 +524,18 @@
   .hrev .memo { font-size: 12.5px; color: #223242; line-height: 1.45; }
   .hrev .sub { font-size: 10.5px; color: #7b8794; margin-top: 3px; }
   .hrev .amt { font-size: 12.5px; font-weight: 800; color: #176a57; white-space: nowrap; }
+  .hcheck-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .hcheck {
+    display: flex; gap: 8px; align-items: flex-start; padding: 9px 10px;
+    border: 1px solid #e4eaf1; border-radius: 12px; background: #fff;
+  }
+  .hcheck input { width: 16px; height: 16px; margin-top: 2px; accent-color: #176a57; }
+  .hcheck .ttl { font-size: 12px; font-weight: 700; color: #223242; line-height: 1.4; }
+  .hcheck .sub { font-size: 10.5px; color: #7b8794; margin-top: 2px; }
+  .hlist-empty {
+    padding: 10px 12px; border: 1px dashed #d5dde6; border-radius: 12px;
+    font-size: 12px; color: #7b8794; background: #fbfcfe;
+  }
 
   /* ── パネルのリサイズハンドル(左端ドラッグで幅変更)──────── */
   .panel-resize {
@@ -2992,10 +3004,27 @@ loadXStatus().then(() => { xUnread = computeUnread(); if (xUnread) forceRerender
 function hTypeLabel(type) {
   return {
     article_draft: '記事ドラフト',
+    affiliate_article: 'アフィリ記事',
     sns_pack: 'SNS導線',
     idea_research: 'ネタ調査',
     custom: '自由プロンプト',
   }[type] || type;
+}
+function hPublishTargetLabel(target) {
+  return {
+    zenn: 'Zenn',
+    generic: 'Generic Git',
+    none: '公開しない',
+  }[target] || target;
+}
+function defaultHPublishTargetForType(type) {
+  return type === 'affiliate_article' ? 'generic' : (type === 'article_draft' ? 'zenn' : 'none');
+}
+function hPublishButtonLabel(target) {
+  return target === 'generic' ? 'Generic Gitへ公開' : 'Zennへ公開';
+}
+function hAffiliateBadge(type) {
+  return type === 'affiliate_article' ? '<span class="hchip warn">💰AD</span>' : '';
 }
 function hStatusLabel(status) {
   return {
@@ -3136,6 +3165,21 @@ function renderHReviewDetails(o) {
       </div>
     </details>`;
 }
+function renderHAffiliateLinkRows(links) {
+  const rows = Array.isArray(links) && links.length ? links : [{ label: '', url: '', note: '' }];
+  return rows.map((link) => `
+    <div class="hjob" data-aff-row>
+      <div class="hgrid">
+        <div><div class="hlabel">label</div><input class="hinput" data-aff-label value="${esc(link.label || '')}" placeholder="商品/サービス名"></div>
+        <div><div class="hlabel">url</div><input class="hinput" data-aff-url value="${esc(link.url || '')}" placeholder="https://example.com/?aff=..."></div>
+        <div style="grid-column:1 / -1"><div class="hlabel">note(任意)</div><input class="hinput" data-aff-note value="${esc(link.note || '')}" placeholder="訴求メモ"></div>
+      </div>
+      <div class="hrow"><button class="hbtn warn" type="button" onclick="removeHAffiliateLinkRow(this)">削除</button></div>
+    </div>`).join('');
+}
+function hSelectedPublishTarget(record) {
+  return (record && record.publishTarget) || defaultHPublishTargetForType(record && record.type);
+}
 function renderHJobsSection(title, statuses) {
   const jobs = HJOBS.filter((j) => statuses.includes(j.status));
   if (!jobs.length) return '';
@@ -3146,9 +3190,10 @@ function renderHJobsSection(title, statuses) {
         <div class="top">
           <div>
             <div class="ttl">${esc(hTypeLabel(j.type))} ${j.topic || j.prompt ? '— ' + esc((j.topic || j.prompt).slice(0, 90)) : ''}</div>
-            <div class="sub">作成 ${fmtAt(Date.parse(j.createdAt))}${j.startedAt ? ' ・ 開始 ' + fmtAt(Date.parse(j.startedAt)) : ''}${j.finishedAt ? ' ・ 完了 ' + fmtAt(Date.parse(j.finishedAt)) : ''}${Number.isFinite(Number(j.score)) ? ' ・ ' + Math.round(Number(j.score)) + '点' : ''}${j.revisionCount ? ' ・ リライト ' + j.revisionCount + '回' : ''}${j.publishError ? ' ・ 公開失敗: ' + esc(j.publishError) : ''}${j.error ? ' ・ ' + esc(j.error) : ''}</div>
+            <div class="sub">作成 ${fmtAt(Date.parse(j.createdAt))}${j.startedAt ? ' ・ 開始 ' + fmtAt(Date.parse(j.startedAt)) : ''}${j.finishedAt ? ' ・ 完了 ' + fmtAt(Date.parse(j.finishedAt)) : ''}${Number.isFinite(Number(j.score)) ? ' ・ ' + Math.round(Number(j.score)) + '点' : ''}${j.revisionCount ? ' ・ リライト ' + j.revisionCount + '回' : ''} ・ 公開先 ${esc(hPublishTargetLabel(hSelectedPublishTarget(j)))}${j.publishError ? ' ・ 公開失敗: ' + esc(j.publishError) : ''}${j.error ? ' ・ ' + esc(j.error) : ''}</div>
           </div>
           <div class="hrow" style="margin-top:0;justify-content:flex-end">
+            ${hAffiliateBadge(j.type)}
             ${hScoreBadge(j.score)}
             <span class="hchip ${hStatusClass(j.status)}">${esc(hStatusLabel(j.status))}</span>
           </div>
@@ -3162,7 +3207,8 @@ function renderHJobsSection(title, statuses) {
 }
 function renderHWork() {
   if (!HSTATUS) return '<div class="empty">商人の状態を取得できません</div>';
-  const pub = HSTATUS.publish || { enabled: false, repoPath: '', articleType: 'tech', price: 0, topics: [], publishedFlag: true };
+  const pub = HSTATUS.publish || { enabled: false, mode: 'zenn-git', repoPath: '', genericRepoPath: '', genericDir: 'content/posts', genericFrontmatter: 'hugo', articleType: 'tech', price: 0, topics: [], publishedFlag: true };
+  const aff = HSTATUS.affiliate || { enabled: false, disclosure: '※本記事にはアフィリエイトリンクが含まれます。', links: [] };
   const pct = Math.max(0, Math.min(100, Math.round(((HSTATUS.window5h && HSTATUS.window5h.totalTokens) || 0) / Math.max(1, HSTATUS.tokenBudget5h) * 100)));
   return `
     <div class="hcard">
@@ -3192,16 +3238,35 @@ function renderHWork() {
         <div class="hlabel" style="margin-top:12px">公開設定</div>
         <div class="htoggle">
           <div>
-            <div class="hmeta">approved 記事を Zenn 連携リポジトリへ自動公開します。OFF の場合は成果物タブから手動公開できます。</div>
+            <div class="hmeta">approved 成果物を publishTarget に応じて自動公開します。OFF の場合は成果物タブから手動公開できます。</div>
           </div>
           <input type="checkbox" id="h-publish-enabled" ${pub.enabled ? 'checked' : ''}>
         </div>
         <div class="hgrid" style="margin-top:10px">
+          <div><div class="hlabel">publish.mode</div><select class="hselect" id="h-publish-mode"><option value="zenn-git" ${pub.mode === 'zenn-git' ? 'selected' : ''}>zenn-git</option><option value="generic-git" ${pub.mode === 'generic-git' ? 'selected' : ''}>generic-git</option></select></div>
+          <div><div class="hlabel">genericFrontmatter</div><select class="hselect" id="h-publish-generic-frontmatter"><option value="hugo" ${pub.genericFrontmatter === 'hugo' ? 'selected' : ''}>hugo</option><option value="jekyll" ${pub.genericFrontmatter === 'jekyll' ? 'selected' : ''}>jekyll</option></select></div>
           <div style="grid-column:1 / -1"><div class="hlabel">Zenn リポジトリパス</div><input class="hinput" id="h-publish-repo" value="${esc(pub.repoPath || '')}" placeholder="/path/to/zenn-repo"></div>
           <div><div class="hlabel">type</div><select class="hselect" id="h-publish-type"><option value="tech" ${pub.articleType === 'tech' ? 'selected' : ''}>tech</option><option value="idea" ${pub.articleType === 'idea' ? 'selected' : ''}>idea</option></select></div>
           <div><div class="hlabel">price</div><input class="hinput" id="h-publish-price" type="number" min="0" step="1" value="${esc(pub.price || 0)}"></div>
           <div style="grid-column:1 / -1"><div class="hlabel">topics(任意・カンマ区切り)</div><input class="hinput" id="h-publish-topics" value="${esc((pub.topics || []).join(', '))}" placeholder="ai-agents,claude,zenn"></div>
+          <div style="grid-column:1 / -1"><div class="hlabel">Generic リポジトリパス</div><input class="hinput" id="h-publish-generic-repo" value="${esc(pub.genericRepoPath || '')}" placeholder="/path/to/static-blog-repo"></div>
+          <div style="grid-column:1 / -1"><div class="hlabel">genericDir</div><input class="hinput" id="h-publish-generic-dir" value="${esc(pub.genericDir || 'content/posts')}" placeholder="content/posts"></div>
         </div>
+        <div class="hlabel" style="margin-top:12px">アフィリエイト設定</div>
+        <div class="htoggle">
+          <div>
+            <div class="hmeta">affiliate_article で使う開示文言とリンクを管理します。開示文言は記事冒頭に強制挿入されます。</div>
+          </div>
+          <input type="checkbox" id="h-aff-enabled" ${aff.enabled ? 'checked' : ''}>
+        </div>
+        <div class="hlabel" style="margin-top:10px">開示文言</div>
+        <textarea class="htextarea" id="h-aff-disclosure" placeholder="※本記事にはアフィリエイトリンクが含まれます。">${esc(aff.disclosure || '')}</textarea>
+        <div class="hrow" style="justify-content:space-between">
+          <div class="hlabel" style="margin-bottom:0">リンク一覧</div>
+          <button class="hbtn alt" type="button" onclick="addHAffiliateLinkRow()">＋ リンク追加</button>
+        </div>
+        <div id="h-aff-links">${renderHAffiliateLinkRows(aff.links || [])}</div>
+        <div class="hmini">label は記事中の {{aff:label}} に使われます。URL はモデルに渡さず、保存時にだけ置換されます。</div>
         <div class="hrow"><button class="hbtn" type="submit">設定を保存</button></div>
       </form>
     </div>
@@ -3229,14 +3294,29 @@ function renderHWork() {
         <div class="hrow">
           <select class="hselect" id="h-job-type" onchange="updateHJobHint()">
             <option value="article_draft">記事ドラフト</option>
+            <option value="affiliate_article">アフィリ記事</option>
             <option value="sns_pack">SNS導線</option>
             <option value="idea_research">ネタ調査</option>
             <option value="custom">自由プロンプト</option>
           </select>
           <button class="hbtn" type="submit">追加</button>
         </div>
+        <div class="hgrid" style="margin-top:10px">
+          <div style="grid-column:1 / -1"><div class="hlabel">公開先</div><select class="hselect" id="h-job-publish-target"><option value="zenn">zenn</option><option value="generic">generic</option><option value="none">none</option></select></div>
+        </div>
         <div class="hlabel" style="margin-top:10px">トピック / プロンプト</div>
         <textarea class="htextarea" id="h-job-text" placeholder="例: Claude CLIの遊休時間活用術"></textarea>
+        <div id="h-job-aff-links-wrap" style="margin-top:10px;display:none">
+          <div class="hlabel">使用するアフィリエイトリンク</div>
+          <div class="hmini">未指定なら設定済みリンク全体からモデルに選ばせます。</div>
+          ${aff.links.length ? `<div class="hcheck-grid">
+            ${aff.links.map((link, idx) => `
+              <label class="hcheck">
+                <input type="checkbox" value="${esc(link.label)}" id="h-job-aff-${idx}">
+                <div><div class="ttl">${esc(link.label)}</div>${link.note ? `<div class="sub">${esc(link.note)}</div>` : ''}</div>
+              </label>`).join('')}
+          </div>` : '<div class="hlist-empty">まず上のアフィリエイト設定でリンクを登録してください。</div>'}
+        </div>
       </form>
     </div>
 
@@ -3248,6 +3328,7 @@ function renderHOutputs() {
   if (!HOUTPUTS.length) return '<div class="empty">成果物はまだありません</div>';
   const selected = HOUTPUTS.find((o) => o.id === hCurrentOutputId) || HOUTPUTS[0];
   const cached = selected ? hOutputCache[selected.id] : null;
+  const selectedTarget = hSelectedPublishTarget(cached || selected);
   return `
     <div class="hsplit">
       <div class="hout-list">
@@ -3255,10 +3336,11 @@ function renderHOutputs() {
           <div class="hout-item ${selected && selected.id === o.id ? 'active' : ''}" onclick="selectHOutput('${o.id}')">
             <div class="ttl">${esc(hOutputTitle(o))}</div>
             <div class="hrow" style="margin-top:6px">
+              ${hAffiliateBadge(o.type)}
               ${hScoreBadge(o.score)}
               <span class="hchip ${hStatusClass(o.state)}">${esc(hStatusLabel(o.state))}</span>
             </div>
-            <div class="meta">${esc(hTypeLabel(o.type))} ・ ${esc(fmtAt(Date.parse(o.updatedAt || o.createdAt)))}</div>
+            <div class="meta">${esc(hTypeLabel(o.type))} ・ 公開先 ${esc(hPublishTargetLabel(hSelectedPublishTarget(o)))} ・ ${esc(fmtAt(Date.parse(o.updatedAt || o.createdAt)))}</div>
           </div>`).join('')}
       </div>
       <div class="hout-view">
@@ -3266,18 +3348,20 @@ function renderHOutputs() {
           <div class="hrow" style="justify-content:space-between;margin-top:0">
             <div>
               <div class="hlabel">成果物</div>
-              <div class="hmeta"><b>${esc(hOutputTitle(selected))}</b><br>${esc(hTypeLabel(selected.type))} ・ ${esc(fmtAt(Date.parse(selected.updatedAt || selected.createdAt)))}</div>
+              <div class="hmeta"><b>${esc(hOutputTitle(selected))}</b><br>${esc(hTypeLabel(selected.type))} ・ 公開先 ${esc(hPublishTargetLabel(selectedTarget))} ・ ${esc(fmtAt(Date.parse(selected.updatedAt || selected.createdAt)))}</div>
             </div>
             <div class="hrow" style="margin-top:0">
-              ${cached && cached.state === 'approved' ? `<button class="hbtn" onclick="publishHOutput('${selected.id}')">Zennへ公開</button>` : ''}
+              ${cached && cached.state === 'approved' && selectedTarget !== 'none' ? `<button class="hbtn" onclick="publishHOutput('${selected.id}')">${esc(hPublishButtonLabel(selectedTarget))}</button>` : ''}
               <button class="hbtn alt" onclick="copyHOutput()" ${cached ? '' : 'disabled'}>コピー</button>
             </div>
           </div>
           ${cached ? `
             <div class="hrow">
+              ${hAffiliateBadge(cached.type)}
               ${hScoreBadge(cached.score)}
               <span class="hchip ${hStatusClass(cached.state)}">${esc(hStatusLabel(cached.state))}</span>
               ${cached.revisionCount ? `<span class="hchip">リライト ${esc(cached.revisionCount)}回</span>` : ''}
+              <span class="hchip pub">${esc(hPublishTargetLabel(selectedTarget))}</span>
               ${cached.slug ? `<span class="hchip">slug: ${esc(cached.slug)}</span>` : ''}
             </div>
             ${cached.publishError ? `<div class="hmini" style="color:#c0392b">公開エラー: ${esc(cached.publishError)}</div>` : ''}
@@ -3354,14 +3438,38 @@ function renderHPanel() {
 function updateHJobHint() {
   const type = $('h-job-type');
   const box = $('h-job-text');
+  const publishTarget = $('h-job-publish-target');
+  const affWrap = $('h-job-aff-links-wrap');
   if (!type || !box) return;
   const placeholders = {
     article_draft: '例: Claude CLIの遊休時間活用術',
+    affiliate_article: '例: 初心者向けVPS比較',
     sns_pack: '例: 生成した記事ドラフトを宣伝する投稿導線',
     idea_research: '例: AIエージェント監視ダッシュボードの収益化アイデア',
     custom: '自由に実行したいプロンプトをそのまま入力',
   };
   box.placeholder = placeholders[type.value] || '';
+  if (publishTarget) publishTarget.value = defaultHPublishTargetForType(type.value);
+  if (affWrap) affWrap.style.display = type.value === 'affiliate_article' ? '' : 'none';
+}
+function addHAffiliateLinkRow() {
+  const host = $('h-aff-links');
+  if (!host) return;
+  host.insertAdjacentHTML('beforeend', renderHAffiliateLinkRows([{ label: '', url: '', note: '' }]));
+}
+function removeHAffiliateLinkRow(button) {
+  const row = button && button.closest ? button.closest('[data-aff-row]') : null;
+  const host = $('h-aff-links');
+  if (!row || !host) return;
+  row.remove();
+  if (!host.querySelector('[data-aff-row]')) addHAffiliateLinkRow();
+}
+function collectHAffiliateLinks() {
+  return Array.from(document.querySelectorAll('#h-aff-links [data-aff-row]')).map((row) => ({
+    label: row.querySelector('[data-aff-label]')?.value.trim() || '',
+    url: row.querySelector('[data-aff-url]')?.value.trim() || '',
+    note: row.querySelector('[data-aff-note]')?.value.trim() || '',
+  })).filter((link) => link.label || link.url || link.note);
 }
 async function saveHConfig(ev) {
   ev.preventDefault();
@@ -3381,10 +3489,19 @@ async function saveHConfig(ev) {
         autoFromExplorer: $('h-auto-from-explorer').checked,
         publish: {
           enabled: $('h-publish-enabled').checked,
+          mode: $('h-publish-mode').value,
           repoPath: $('h-publish-repo').value.trim(),
+          genericRepoPath: $('h-publish-generic-repo').value.trim(),
+          genericDir: $('h-publish-generic-dir').value.trim(),
+          genericFrontmatter: $('h-publish-generic-frontmatter').value,
           articleType: $('h-publish-type').value,
           price: Number($('h-publish-price').value),
           topics: $('h-publish-topics').value.split(',').map((s) => s.trim()).filter(Boolean),
+        },
+        affiliate: {
+          enabled: $('h-aff-enabled').checked,
+          disclosure: $('h-aff-disclosure').value.trim(),
+          links: collectHAffiliateLinks(),
         },
       }),
     });
@@ -3399,15 +3516,20 @@ async function addHJob(ev) {
   ev.preventDefault();
   const type = $('h-job-type').value;
   const text = $('h-job-text').value.trim();
+  const publishTarget = $('h-job-publish-target').value;
+  const affiliateLinkLabels = Array.from(document.querySelectorAll('#h-job-aff-links-wrap input[type=checkbox]:checked')).map((input) => input.value);
   if (!text) return false;
   try {
     hBusy = true;
     await hFetchJson('/api/hustler/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(type === 'custom' ? { type, prompt: text } : { type, topic: text }),
+      body: JSON.stringify(type === 'custom'
+        ? { type, prompt: text, publishTarget, affiliateLinkLabels }
+        : { type, topic: text, publishTarget, affiliateLinkLabels }),
     });
     $('h-job-text').value = '';
+    document.querySelectorAll('#h-job-aff-links-wrap input[type=checkbox]').forEach((input) => { input.checked = false; });
     await loadHustlerData();
     renderHPanel();
   } catch (e) {
