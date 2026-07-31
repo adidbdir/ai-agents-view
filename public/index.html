@@ -941,14 +941,14 @@ function tilePath(w, hh) {
 }
 
 const CAT_COATS = {
-  orangeTabby: { body: '#d59a57', chest: '#f6e7d3', stripe: '#9f5e2b', ear: '#e6b49d', eye: '#9db565', nose: '#b98383', pattern: 'tabby' },
-  brownTabby:  { body: '#8d715f', chest: '#efe0d5', stripe: '#3d3029', ear: '#d9aa98', eye: '#a4b669', nose: '#b98586', pattern: 'tabby' },
-  grayTabby:   { body: '#9ea8b3', chest: '#f3f5f7', stripe: '#5c6670', ear: '#ddb5a8', eye: '#a8bd74', nose: '#c08f93', pattern: 'tabby' },
-  tuxedo:      { body: '#20242b', chest: '#f8fafb', stripe: '#11151a', ear: '#ddb8ae', eye: '#a7c36d', nose: '#c38f93', pattern: 'tuxedo' },
-  calico:      { body: '#f3f1ea', chest: '#fffaf2', stripe: '#ca8750', patch2: '#26211f', ear: '#e0b19f', eye: '#9db36b', nose: '#bb8889', pattern: 'calico' },
-  siamese:     { body: '#eadfc8', chest: '#f7efdc', stripe: '#6a5040', ear: '#d6a69d', eye: '#7cb0c5', nose: '#9c7673', pattern: 'siamese' },
-  black:       { body: '#232831', chest: '#3a414a', stripe: '#11151a', ear: '#d3a59c', eye: '#a5bc6f', nose: '#ba888c', pattern: 'solid' },
-  white:       { body: '#f7f8f5', chest: '#ffffff', stripe: '#d8dde3', ear: '#e6bbb2', eye: '#a5bc71', nose: '#c3959a', pattern: 'solid' },
+  orangeTabby: { base: '#d79a55', light: '#f7ebd7', dark: '#bc844b', sheen: '#fff4e8', ear: '#efc0ac', nose: '#dd919c', outline: null, pattern: 'tabby' },
+  brownTabby:  { base: '#8f7160', light: '#f2e3d8', dark: '#765f52', sheen: '#f6ebe3', ear: '#e6b3a3', nose: '#d9939b', outline: null, pattern: 'tabby' },
+  grayTabby:   { base: '#9ca7b2', light: '#f5f7fa', dark: '#818c98', sheen: '#ffffff', ear: '#efbeb3', nose: '#d99aa3', outline: null, pattern: 'tabby' },
+  tuxedo:      { base: '#262b33', light: '#fbfcfd', dark: '#12161b', sheen: '#6c7681', ear: '#efc1b6', nose: '#db97a1', outline: '#818c97', pattern: 'tuxedo' },
+  calico:      { base: '#f5f0e7', light: '#fffaf3', dark: '#cc8a51', patch: '#e29a56', patch2: '#292321', sheen: '#ffffff', ear: '#edbeaf', nose: '#d68f98', outline: null, pattern: 'calico' },
+  siamese:     { base: '#eadfc9', light: '#fbf2e1', dark: '#6d5442', sheen: '#fff5e7', ear: '#e6b1a5', nose: '#bf8788', outline: null, pattern: 'siamese' },
+  black:       { base: '#252a31', light: '#47515b', dark: '#11151b', sheen: '#677381', ear: '#e4b2a7', nose: '#d28a94', outline: '#a2adb8', pattern: 'solid' },
+  white:       { base: '#f7f8f6', light: '#ffffff', dark: '#d6dde4', sheen: '#ffffff', ear: '#efc6bc', nose: '#d49aa2', outline: '#c5ced7', pattern: 'solid' },
 };
 const CAT_COAT_KEYS = Object.keys(CAT_COATS);
 
@@ -971,41 +971,74 @@ function catAnimStyle(seed, salt, duration, spread = 1.2) {
   const dur = (duration + (((h >> 11) % 100) / 100) * spread).toFixed(2);
   return `animation-delay:-${delay}s;animation-duration:${dur}s;`;
 }
-function catEyePath(cx, cy, dir = 1) {
-  return `M${(cx - 2.8).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy - 1.7).toFixed(1)} ${(cx + 2.8).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy + 1.2).toFixed(1)} ${(cx - 2.8).toFixed(1)},${cy.toFixed(1)} Z`;
+function catEyePath(cx, cy, width = 2.8, arch = 1.8, dip = 1.1) {
+  return `M${(cx - width).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy - arch).toFixed(1)} ${(cx + width).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy + dip).toFixed(1)} ${(cx - width).toFixed(1)},${cy.toFixed(1)} Z`;
 }
 function catCoatKeyForProject(p) {
   return catCoatKey(`project:${p.id || p.dirName || p.name || ''}`);
 }
-function catPawPath(x1, y1, x2, y2, cls = '') {
+function catLimbPath(x1, y1, x2, y2, width = 4.6, stroke = '#d8b8a3', cls = '') {
   return el('path', {
     d: `M${x1},${y1} Q${((x1 + x2) / 2).toFixed(1)},${(Math.min(y1, y2) - 2.8).toFixed(1)} ${x2},${y2}`,
-    stroke: '#d6c4b4', 'stroke-width': 3.4, 'stroke-linecap': 'round', fill: 'none', class: cls,
+    stroke, 'stroke-width': width, 'stroke-linecap': 'round', fill: 'none', class: cls,
   });
+}
+function catPawPad(cx, cy, rx = 3.2, ry = 2.05, fill = '#f5ddd2', cls = '') {
+  return el('ellipse', {
+    cx, cy, rx, ry,
+    fill, stroke: 'rgba(132,96,82,.15)', 'stroke-width': .45, class: cls,
+  });
+}
+function catShadeGradient(id, color, topOpacity = .26, midOpacity = .08) {
+  const grad = el('linearGradient', { id, x1: '0', y1: '0', x2: '0', y2: '1' });
+  grad.appendChild(el('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': topOpacity }));
+  grad.appendChild(el('stop', { offset: '58%', 'stop-color': color, 'stop-opacity': midOpacity }));
+  grad.appendChild(el('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }));
+  return grad;
+}
+function catOpenEye(parent, cx, cy, size = 1, pupilDx = 0, pupilDy = 0) {
+  // 丸いビーズ目(小さめ)+ハイライト1点。大きな黒アーモンドは仮面に見えるため使わない
+  parent.appendChild(el('circle', { cx: cx + pupilDx * .6, cy: cy + pupilDy * .6, r: 1.65 * size, fill: '#2a2f36' }));
+  parent.appendChild(el('circle', { cx: cx + .55 * size + pupilDx * .6, cy: cy - .6 * size + pupilDy * .6, r: .55 * size, fill: '#fff', opacity: .95 }));
+}
+function catClosedEye(parent, cx, cy, size = 1) {
+  parent.appendChild(el('path', {
+    d: `M${(cx - 2.4 * size).toFixed(1)},${cy.toFixed(1)} Q${cx.toFixed(1)},${(cy + 1.35 * size).toFixed(1)} ${(cx + 2.4 * size).toFixed(1)},${cy.toFixed(1)}`,
+    stroke: '#4d535b', 'stroke-width': 1.05 * size, 'stroke-linecap': 'round', fill: 'none',
+  }));
+}
+function catScreenEye(parent, cx, cy, size = 1) {
+  catOpenEye(parent, cx, cy, size, .55 * size, .15 * size);
+}
+function catBlush(parent, spread = 5.1, y = 4.7, rx = 1.9, ry = 1.15) {
+  parent.appendChild(el('ellipse', { cx: -spread, cy: y, rx, ry, fill: '#efb6bf', opacity: .25 }));
+  parent.appendChild(el('ellipse', { cx: spread, cy: y, rx, ry, fill: '#efb6bf', opacity: .25 }));
+}
+function catBodyClipNode(id, d) {
+  const cp = el('clipPath', { id });
+  cp.appendChild(el('path', { d }));
+  return cp;
 }
 function catRaisedPawNode(pose = 'stand') {
   const spec = pose === 'work'
-    ? { start: [3, -12], c1: [6, -20], c2: [10, -28], end: [9, -35], paw: [9.2, -36.2] }
+    ? { start: [3.8, -16.2], c1: [8, -22], c2: [12.5, -30], end: [14.3, -35.1], paw: [14.7, -35.8] }
     : pose === 'present'
-      ? { start: [4, -22], c1: [8, -29], c2: [11, -36], end: [10, -43], paw: [10.2, -44.2] }
-      : { start: [3, -9], c1: [6, -17], c2: [10, -24], end: [9, -31], paw: [9.2, -32.2] };
+      ? { start: [5.6, -16.8], c1: [9.8, -20.8], c2: [13.8, -27.4], end: [16.4, -32.1], paw: [16.8, -32.8] }
+      : { start: [4.2, -12.8], c1: [7.8, -18.8], c2: [11.6, -26.6], end: [13.6, -31.9], paw: [14, -32.6] };
   const g = el('g', { class: 'wave' });
   g.appendChild(el('path', {
     d: `M${spec.start[0]},${spec.start[1]} C${spec.c1[0]},${spec.c1[1]} ${spec.c2[0]},${spec.c2[1]} ${spec.end[0]},${spec.end[1]}`,
-    stroke: '#d6c4b4', 'stroke-width': 3.4, 'stroke-linecap': 'round', fill: 'none',
+    stroke: '#d7b59f', 'stroke-width': 4.3, 'stroke-linecap': 'round', fill: 'none',
   }));
-  g.appendChild(el('ellipse', {
-    cx: spec.paw[0], cy: spec.paw[1], rx: 1.9, ry: 1.35,
-    fill: '#ead8ca', stroke: '#c8b09d', 'stroke-width': .45,
-  }));
+  g.appendChild(catPawPad(spec.paw[0], spec.paw[1], 2.35, 1.55));
   return g;
 }
 function catWaitBubbleNode(pose = 'stand') {
   const offset = pose === 'work'
-    ? { x: 8.6, y: -12.6 }
+    ? { x: 12.4, y: -13.4 }
     : pose === 'present'
-      ? { x: 9.6, y: -13.6 }
-      : { x: 8.4, y: -12.2 };
+      ? { x: 12.8, y: -14.1 }
+      : { x: 10.8, y: -13.1 };
   const g = el('g', { class: 'wait-float', transform: `translate(${offset.x},${offset.y})` });
   g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 7.8, ry: 6.2, fill: '#fff7ef', stroke: '#ef8b3c', 'stroke-width': 1.15 }));
   g.appendChild(el('path', { d: 'M-1.2,5.1 L-4.1,10.1 L1.2,6.8 Z', fill: '#fff7ef', stroke: '#ef8b3c', 'stroke-width': .95, 'stroke-linejoin': 'round' }));
@@ -1013,53 +1046,94 @@ function catWaitBubbleNode(pose = 'stand') {
   return g;
 }
 function catPatternLayers(coat, pose) {
-  const nodes = [];
+  const nodes = { body: [], head: [], front: [] };
+  const seated = pose === 'stand' || pose === 'work' || pose === 'present';
   if (coat.pattern === 'tabby') {
-    nodes.push(el('path', {
-      d: pose === 'walk'
-        ? 'M-8,-20 c2,-2 3,-4 2,-8 M-1,-22 c2,-2 3,-4 2,-8 M6,-21 c2,-2 3,-4 2,-8'
-        : 'M-7,-20 c2,-3 3,-7 1,-11 M0,-23 c2,-3 3,-7 1,-11 M7,-21 c2,-3 3,-7 1,-10',
-      stroke: coat.stripe, 'stroke-width': 1.8, 'stroke-linecap': 'round', fill: 'none', opacity: .88,
+    nodes.body.push(el('path', {
+      d: seated
+        ? 'M-8.6,-21.6 C-7.1,-18.9 -7.4,-15.8 -9.6,-13.2 M-.6,-22.4 C.8,-19.4 .5,-16.1 -1.8,-13.4 M6.8,-20.8 C8,-18.3 7.6,-15.3 5.8,-12.8'
+        : pose === 'walk'
+          ? 'M-7.5,-18.7 C-6.1,-17.1 -6.3,-14.8 -8.4,-12.9 M-.1,-19.4 C1.4,-17.6 1.2,-15 -.8,-13.1 M8,-18.2 C9.4,-16.5 9.2,-14.2 7.1,-12.4'
+          : 'M-7.2,-17.4 C-5.9,-15.5 -6.1,-12.9 -7.9,-10.9 M-.2,-18.7 C1.2,-16.6 1,-13.6 -1.1,-11.7 M5.8,-16.9 C7.3,-15.1 7.5,-12.6 6.1,-10.4',
+      stroke: coat.dark, 'stroke-width': 1.55, 'stroke-linecap': 'round', fill: 'none', opacity: .46,
     }));
-    nodes.push(el('path', {
-      d: 'M-3,-33 l-2,-3 M0,-34 l0,-3.5 M3,-33 l2,-3',
-      stroke: coat.stripe, 'stroke-width': 1.4, 'stroke-linecap': 'round', fill: 'none', opacity: .82,
+    nodes.head.push(el('path', {
+      d: 'M-2.2,-8.6 C-1.4,-9.7 -.6,-10.2 0,-10.4 C.6,-10.2 1.4,-9.7 2.2,-8.6',
+      stroke: coat.dark, 'stroke-width': 1.15, 'stroke-linecap': 'round', fill: 'none', opacity: .48,
     }));
   } else if (coat.pattern === 'tuxedo') {
-    nodes.push(el('path', {
-      d: 'M-4,-31 C-2,-34 2,-34 4,-31 C2,-27 -2,-27 -4,-31 Z',
-      fill: coat.chest, opacity: .96,
+    nodes.head.push(el('path', {
+      d: 'M-3.7,-3.4 C-2.4,-5.2 2.2,-5.2 3.7,-3.4 C2.8,-1.1 -2.8,-1.1 -3.7,-3.4 Z',
+      fill: coat.light, opacity: .98,
     }));
   } else if (coat.pattern === 'calico') {
-    nodes.push(el('ellipse', { cx: -4.5, cy: -21, rx: 4.2, ry: 5.1, fill: coat.stripe, opacity: .96 }));
-    nodes.push(el('ellipse', { cx: 6.8, cy: -16, rx: 4.8, ry: 4.2, fill: coat.patch2, opacity: .94 }));
+    if (seated) {
+      const leftCy = pose === 'work' ? -15.4 : -16.4;
+      const rightCy = pose === 'work' ? -13.8 : -11.8;
+      nodes.body.push(el('ellipse', { cx: -5.9, cy: leftCy, rx: 4.1, ry: 4.6, fill: coat.patch, opacity: .94 }));
+      nodes.body.push(el('ellipse', { cx: 5.5, cy: rightCy, rx: 4.4, ry: 3.9, fill: coat.patch2, opacity: .94 }));
+      nodes.head.push(el('ellipse', { cx: -4.3, cy: -1.9, rx: 2.6, ry: 3.1, fill: coat.patch, opacity: .92 }));
+    } else if (pose === 'walk') {
+      nodes.body.push(el('ellipse', { cx: -2.2, cy: -16.2, rx: 5.1, ry: 4.8, fill: coat.patch, opacity: .94 }));
+      nodes.body.push(el('ellipse', { cx: 11.8, cy: -12.6, rx: 4.2, ry: 3.8, fill: coat.patch2, opacity: .94 }));
+      nodes.head.push(el('ellipse', { cx: -3.7, cy: -1.6, rx: 2.5, ry: 3, fill: coat.patch2, opacity: .92 }));
+    } else {
+      nodes.body.push(el('ellipse', { cx: -4.8, cy: -14.8, rx: 4.2, ry: 4.8, fill: coat.patch, opacity: .94 }));
+      nodes.body.push(el('ellipse', { cx: 5.8, cy: -10.4, rx: 4.5, ry: 3.9, fill: coat.patch2, opacity: .94 }));
+      nodes.head.push(el('ellipse', { cx: 3.9, cy: -2.2, rx: 2.3, ry: 2.9, fill: coat.patch, opacity: .92 }));
+    }
   } else if (coat.pattern === 'siamese') {
-    nodes.push(el('path', {
-      d: 'M-6.5,-32 C-4.4,-35.6 4.4,-35.6 6.5,-32 C4.7,-28.1 -4.7,-28.1 -6.5,-32 Z',
-      fill: coat.stripe, opacity: .94,
+    nodes.head.push(el('path', {
+      d: 'M-3.7,-6.3 C-2.1,-7.6 2.1,-7.6 3.7,-6.3 C2.4,-4.9 -2.4,-4.9 -3.7,-6.3 Z',
+      fill: coat.dark, opacity: .82,
     }));
-    nodes.push(el('path', {
-      d: 'M-8,-4 h4 M4,-4 h4',
-      stroke: coat.stripe, 'stroke-width': 2.8, 'stroke-linecap': 'round', opacity: .9,
+    nodes.body.push(el('path', {
+      d: seated
+        ? 'M8.7,-20.2 C12.1,-18.8 13.9,-16.1 14.3,-12.8 C11,-11.2 8,-11.5 5.5,-13.2 C5.3,-16.6 6.2,-18.7 8.7,-20.2 Z'
+        : pose === 'walk'
+          ? 'M9.2,-19.3 C13.6,-19.1 16.6,-16.8 17.8,-13.1 C14.6,-11.5 10.9,-11.7 7.8,-13.3 C7.6,-16.3 7.9,-18.2 9.2,-19.3 Z'
+          : 'M4.2,-17.6 C8.7,-17.8 12.3,-15.8 13.7,-12.6 C10.8,-10.9 6.8,-10.7 3.7,-12.4 C2.8,-14.3 2.9,-16.4 4.2,-17.6 Z',
+      fill: coat.dark, opacity: .72,
     }));
-  } else if (coat.pattern === 'solid' && coat.stripe) {
-    nodes.push(el('path', {
-      d: 'M-9,-15 C-3,-20 2,-20 9,-15',
-      stroke: coat.stripe, 'stroke-width': 1.4, 'stroke-linecap': 'round', fill: 'none', opacity: .28,
+    nodes.front.push(el('path', {
+      d: seated ? 'M-5.4,2.6 C-3.9,5.2 3.9,5.2 5.4,2.6' : 'M-7.2,2.2 C-5.6,4.8 4.6,4.8 6.1,2.2',
+      stroke: coat.dark, 'stroke-width': 2.2, 'stroke-linecap': 'round', fill: 'none', opacity: .42,
+    }));
+  } else if (coat.pattern === 'solid' && coat.dark) {
+    nodes.body.push(el('path', {
+      d: seated
+        ? 'M-8.6,-9.6 C-4.2,-13.6 3.8,-13.7 8.6,-9.4'
+        : pose === 'walk'
+          ? 'M-7.8,-12.2 C-2.8,-15.2 7.1,-15.2 12.8,-11.8'
+          : 'M-10.4,-9.1 C-5.2,-11.8 1.4,-11.2 6.7,-8.5',
+      stroke: coat.dark, 'stroke-width': 1.5, 'stroke-linecap': 'round', fill: 'none', opacity: coat.outline ? .22 : .12,
     }));
   }
   return nodes;
 }
-function catAccessoryNodes(accessory, coat) {
+function catAccessoryNodes(accessory, coat, pose, part = 'head') {
   const parts = [];
   const accs = catAccessoryList(accessory);
   for (const acc of accs) {
-    if (acc === 'secretary') {
-      parts.push(el('path', { d: 'M-3.4,6 Q0,9.4 3.4,6 L0,10.2 Z', fill: '#cc4c55' }));
-      parts.push(el('path', { d: 'M-5,-2.8 h3.8 a1.9,1.9 0 0 1 0,3.8 h-3.8 a1.9,1.9 0 0 1 0,-3.8 Z M1.2,-2.8 h3.8 a1.9,1.9 0 0 1 0,3.8 h-3.8 a1.9,1.9 0 0 1 0,-3.8 Z M-1.2,-.9 h2.4', fill: 'none', stroke: '#55677a', 'stroke-width': 1 }));
-    } else if (acc === 'explorer') {
-      parts.push(el('path', { d: 'M-6.4,5.2 Q0,8.7 6.4,5.2 L5,8.8 Q0,10.2 -5,8.8 Z', fill: '#c97a43', stroke: '#9a5628', 'stroke-width': .8 }));
-      parts.push(el('path', { d: 'M5,8.4 l3.1,2.2', stroke: '#9a5628', 'stroke-width': .9, 'stroke-linecap': 'round' }));
+    if (acc === 'secretary' && part === 'head') {
+      const g = el('g');
+      g.appendChild(el('circle', { cx: -3.5, cy: 1.1, r: 2.8, fill: 'none', stroke: '#5d6e81', 'stroke-width': .9 }));
+      g.appendChild(el('circle', { cx: 3.5, cy: 1.1, r: 2.8, fill: 'none', stroke: '#5d6e81', 'stroke-width': .9 }));
+      g.appendChild(el('path', { d: 'M-1,1.1 C-.5,.5 .5,.5 1,1.1', stroke: '#5d6e81', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none' }));
+      g.appendChild(el('path', { d: 'M-6.2,1.2 C-7.3,1.1 -7.8,1.3 -8.3,1.6 M6.2,1.2 C7.3,1.1 7.8,1.3 8.3,1.6', stroke: '#5d6e81', 'stroke-width': .65, 'stroke-linecap': 'round', fill: 'none', opacity: .7 }));
+      parts.push(g);
+    } else if (acc === 'secretary' && part === 'body') {
+      parts.push(el('path', { d: 'M-5.3,-21 C-2.4,-18.6 2.4,-18.6 5.3,-21 C4.2,-17.4 2.2,-15.8 0,-15.8 C-2.2,-15.8 -4.2,-17.4 -5.3,-21 Z', fill: '#cd5260', opacity: .97 }));
+    } else if (acc === 'explorer' && part === 'body') {
+      const y = pose === 'walk' ? -14.2 : -18.4; // 首元(顎の下)。口に掛からない高さ
+      parts.push(el('path', {
+        d: `M-6.6,${y} C-3.8,${(y + 1.2).toFixed(1)} 3.8,${(y + 1.2).toFixed(1)} 6.6,${y} C5.4,${(y + 2.1).toFixed(1)} 2.3,${(y + 2.9).toFixed(1)} 0,${(y + 3.3).toFixed(1)} C-2.3,${(y + 2.9).toFixed(1)} -5.4,${(y + 2.1).toFixed(1)} -6.6,${y} Z`,
+        fill: '#cb7b41', stroke: '#9c5b2c', 'stroke-width': .7,
+      }));
+      parts.push(el('path', { d: `M4.8,${(y + 2.5).toFixed(1)} C6.2,${(y + 2.8).toFixed(1)} 7.1,${(y + 3.3).toFixed(1)} 8.4,${(y + 4.3).toFixed(1)}`, stroke: '#9c5b2c', 'stroke-width': .85, 'stroke-linecap': 'round', fill: 'none' }));
+    } else if (acc === 'merchant' && part === 'sleep-side') {
+      parts.push(el('path', { d: 'M13.6,-15.8 C16.5,-16.3 19.1,-14.9 20.2,-12.2 C18.6,-9.8 15.6,-8.8 12.8,-9.8 C11.8,-11.6 12.1,-14.5 13.6,-15.8 Z', fill: '#bc8341', stroke: '#96611f', 'stroke-width': .8, opacity: .97 }));
+      parts.push(el('ellipse', { cx: 20.3, cy: -12.4, rx: 2.5, ry: 1.8, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .8 }));
     }
   }
   return parts;
@@ -1070,20 +1144,18 @@ function appendCatBodyAccessory(parent, accessory, pose) {
   if (!hasCatAccessory(accessory, 'merchant')) return;
   const g = el('g');
   if (pose === 'sleep') {
-    g.appendChild(el('path', { d: 'M-2,-17 C2,-18.5 7,-16.5 8.5,-12 C6.2,-9.8 2.2,-9.5 -1.4,-11.2 C-3.1,-12.6 -3.2,-15 -2,-17 Z', fill: '#c8873b', stroke: '#9f6b21', 'stroke-width': .8, opacity: .96 }));
-    g.appendChild(el('ellipse', { cx: 7.7, cy: -12.1, rx: 2.8, ry: 1.9, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .8 }));
-    g.appendChild(el('path', { d: 'M6.5,-12.1 h2.4', stroke: '#9f7b26', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none' }));
+    for (const n of catAccessoryNodes('merchant', null, pose, 'sleep-side')) g.appendChild(n);
   } else {
     const apron = pose === 'present'
-      ? 'M-4.4,-24 C-3.1,-19.4 -2.2,-8.4 0,-3.2 C2.2,-8.4 3.1,-19.4 4.4,-24 L4.2,-7.2 C1.4,-1.4 -1.4,-1.4 -4.2,-7.2 Z'
+      ? 'M-5.6,-20.4 C-4.4,-16 -3.7,-9.3 -1.2,-3 C1.8,-1.8 4.5,-4.7 5.7,-10.8 C6.2,-13.6 5.9,-17.1 5.2,-20.4 C3.6,-18.4 1.8,-17.6 0,-17.6 C-1.8,-17.6 -3.7,-18.4 -5.6,-20.4 Z'
       : pose === 'walk'
-        ? 'M-4.9,-20.5 C-4,-16.4 -2.9,-8.4 0,-4.2 C2.9,-8.4 4,-16.4 4.9,-20.5 L4.1,-5 C1.3,-1.5 -1.3,-1.5 -4.1,-5 Z'
-        : 'M-4.6,-22.5 C-3.2,-18.1 -2.2,-9.1 0,-4.1 C2.2,-9.1 3.2,-18.1 4.6,-22.5 L4.1,-5.3 C1.4,-1.5 -1.4,-1.5 -4.1,-5.3 Z';
-    const coinY = pose === 'present' ? -17.5 : (pose === 'walk' ? -14.8 : -16.4);
+        ? 'M-4.8,-17.6 C-3.9,-13.6 -2.2,-8.7 .2,-5.1 C2.4,-6.8 4.2,-10.8 4.8,-15 C4.5,-17 3.1,-18.2 1.6,-18.8 C.3,-19.3 -2.2,-18.9 -4.8,-17.6 Z'
+        : 'M-5.2,-20.6 C-4.1,-16.1 -3.1,-8.3 -.5,-2.1 C2.7,-1 5.6,-4.6 6.2,-12.2 C6.4,-15.4 5.8,-18.2 5,-20.8 C3.3,-18.7 1.7,-17.8 0,-17.8 C-1.7,-17.8 -3.4,-18.7 -5.2,-20.6 Z';
+    const coinY = pose === 'present' ? -11.8 : (pose === 'walk' ? -10.6 : -11.4);
     g.appendChild(el('path', { d: apron, fill: '#c8873b', stroke: '#9f6b21', 'stroke-width': 1, opacity: .97 }));
-    g.appendChild(el('path', { d: 'M-2.4,-23.4 Q0,-21.2 2.4,-23.4', stroke: '#f7e0b3', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none', opacity: .9 }));
-    g.appendChild(el('ellipse', { cx: 7.8, cy: coinY, rx: 2.9, ry: 1.95, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .9 }));
-    g.appendChild(el('path', { d: 'M6.5,' + coinY + ' h2.6', stroke: '#9f7b26', 'stroke-width': .85, 'stroke-linecap': 'round', fill: 'none' }));
+    g.appendChild(el('path', { d: 'M-2.8,-20.7 Q0,-18.3 2.8,-20.7', stroke: '#f7e0b3', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none', opacity: .88 }));
+    g.appendChild(el('ellipse', { cx: 10.7, cy: coinY, rx: 2.9, ry: 1.95, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .9 }));
+    g.appendChild(el('path', { d: `M9.4,${coinY} h2.6`, stroke: '#9f7b26', 'stroke-width': .85, 'stroke-linecap': 'round', fill: 'none' }));
   }
   parent.appendChild(g);
 }
@@ -1104,149 +1176,229 @@ function cat(opts = {}) {
   const coat = catCoat(coatSeed);
   const outer = el('g');
   const shadow = pose === 'sleep'
-    ? el('ellipse', { cx: 0, cy: 1.6, rx: 15, ry: 4.3, fill: '#31424f', opacity: .14 })
-    : el('ellipse', { cx: 0, cy: 1.5, rx: pose === 'walk' ? 12.5 : 10.5, ry: 3.2, fill: '#31424f', opacity: .15 });
+    ? el('ellipse', { cx: 0, cy: 1.8, rx: 18, ry: 4.6, fill: '#31424f', opacity: .13 })
+    : el('ellipse', { cx: 0, cy: 1.4, rx: pose === 'walk' ? 16.2 : (pose === 'work' ? 11.8 : 12.8), ry: pose === 'walk' ? 3.5 : 3.2, fill: '#31424f', opacity: .14 });
   outer.appendChild(shadow);
+  const defs = el('defs');
+  const gradBase = `cat-${hashString(`${seed}:${pose}:${coat.base}`)}`;
+  const bodyShadeId = `${gradBase}-body`;
+  const headShadeId = `${gradBase}-head`;
+  defs.appendChild(catShadeGradient(bodyShadeId, coat.sheen, coat.outline ? .34 : .24, coat.outline ? .12 : .06));
+  defs.appendChild(catShadeGradient(headShadeId, coat.sheen, coat.outline ? .36 : .28, coat.outline ? .12 : .08));
+  outer.appendChild(defs);
 
   const motionClass = [anim, pose === 'sleep' ? 'cat-doze' : '', groom ? 'cat-groom' : ''].filter(Boolean).join(' ');
   const motion = el('g', motionClass ? { class: motionClass } : {});
   const facing = el('g', flip ? { transform: 'scale(-1,1)' } : {});
   motion.appendChild(facing);
   outer.appendChild(motion);
+  const patterns = catPatternLayers(coat, pose);
+  const edgeStroke = coat.outline ? { stroke: coat.outline, 'stroke-width': .8, 'stroke-linejoin': 'round', opacity: .55 } : null;
+  const earBase = coat.pattern === 'siamese' ? coat.dark : coat.base;
+  const tailColor = coat.pattern === 'siamese' ? coat.dark : coat.base;
 
   if (pose === 'sleep') {
+    const bodyD = 'M-18,-7.2 C-18.5,-16.4 -10.2,-22.7 .2,-22.1 C9.8,-21.5 16.8,-16.1 15.8,-7.2 C15.1,0 7.2,3.6 -2.5,3 C-11,2.5 -17.3,-1 -18,-7.2 Z';
+    const bellyD = 'M-5.8,-15.9 C-.8,-18.8 7.1,-16.9 10,-11.4 C7.9,-6.1 2,-4 -4.2,-5.9 C-6.9,-7 -8.6,-9.5 -8.9,-12.2 C-8.9,-13.8 -7.8,-15 -5.8,-15.9 Z';
+    const bodyClipId = `${gradBase}-bodyclip`;
+    defs.appendChild(catBodyClipNode(bodyClipId, bodyD));
+    const head = el('g', { transform: 'translate(8.6,-12.5) rotate(8)' });
+    const earL = el('path', { d: 'M-7.2,-1.8 C-8,-8.3 -5.4,-13.4 -1.9,-13.4 C-.7,-13.3 -.5,-7 -1.7,-3.3 C-3,-.2 -6.1,.2 -7.2,-1.8 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earL', 5.5) });
+    const earR = el('path', { d: 'M2.1,-3 C1.4,-8.7 4.3,-13.1 7.5,-12.9 C8.7,-12.7 8.8,-6.8 7.1,-2.9 C5.7,0 3,0 2.1,-3 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earR', 6.1) });
     facing.appendChild(el('path', {
-      d: 'M-13,-8 C-14,-18 -4,-24 6,-21 C14,-18 16,-9 12,-3 C8,3 -4,4 -10,0 C-12,-1 -13,-4 -13,-8 Z',
-      fill: coat.body,
+      d: 'M-14.5,-4.1 C-18.7,-7.7 -18.7,-16.7 -10.9,-18.6 C-3.7,-20.3 1.2,-14.5 -1.2,-8.6',
+      stroke: tailColor, 'stroke-width': 6.2, 'stroke-linecap': 'round', fill: 'none', class: 'tail-swish alt',
+      style: catAnimStyle(seed, 'tail', 3.4, .8) + 'transform-origin:18% 74%;transform-box:fill-box;',
     }));
-    facing.appendChild(el('path', { d: 'M-4,-15 C0,-18 6,-17 8,-12 C6,-7 0,-6 -5,-8 C-6,-10 -6,-12 -4,-15 Z', fill: coat.chest, opacity: .96 }));
-    for (const n of catPatternLayers(coat, pose)) facing.appendChild(n);
-    const tail = el('path', {
-      d: 'M-11,-5 C-18,-8 -19,-18 -10,-19 C-3,-20 0,-12 -3,-7',
-      stroke: coat.pattern === 'siamese' ? coat.stripe : coat.body,
-      'stroke-width': 5.2, 'stroke-linecap': 'round', fill: 'none', class: 'tail-swish alt',
-      style: catAnimStyle(seed, 'tail', 3.4, .8),
-    });
-    facing.appendChild(tail);
-    facing.appendChild(el('circle', { cx: 8.5, cy: -11, r: 5.2, fill: coat.body }));
-    facing.appendChild(el('path', { d: 'M4.8,-14.3 L7.4,-20.2 L9.3,-14.8 Z M8.3,-15.1 L11.6,-20.6 L13.3,-14.6 Z', fill: coat.pattern === 'siamese' ? coat.stripe : coat.body }));
-    facing.appendChild(el('path', { d: 'M6.1,-16.1 L7.4,-18.9 L8.2,-16.6 M9.4,-16.7 L11.1,-19.2 L11.8,-16.5', fill: coat.ear, opacity: .9 }));
-    facing.appendChild(el('path', { d: 'M6.6,-9.8 Q8.5,-8.4 10.4,-9.8 Q8.5,-8.2 6.6,-9.8 Z', fill: coat.chest }));
-    facing.appendChild(el('path', { d: 'M6.3,-11.4 q1.5,-.8 3,0 M8.3,-11.5 q1.5,-.8 3,0', stroke: '#26313a', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none' }));
-    facing.appendChild(el('path', { d: 'M8.6,-9.6 l-.6,1.1 h1.2 Z', fill: coat.nose }));
-    facing.appendChild(el('path', { d: 'M6.6,-8.9 l-3.8,-.5 M10.4,-8.9 l3.8,-.4', stroke: '#9aa7b2', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none', opacity: .92 }));
+    if (coat.outline) facing.appendChild(el('path', {
+      d: 'M-14.5,-4.1 C-18.7,-7.7 -18.7,-16.7 -10.9,-18.6 C-3.7,-20.3 1.2,-14.5 -1.2,-8.6',
+      stroke: coat.outline, 'stroke-width': 2.2, 'stroke-linecap': 'round', fill: 'none', opacity: .55,
+    }));
+    facing.appendChild(el('path', { d: bodyD, fill: coat.base }));
+    facing.appendChild(el('path', { d: bodyD, fill: `url(#${bodyShadeId})` }));
+    const bodyOverlay = el('g', { 'clip-path': `url(#${bodyClipId})` });
+    bodyOverlay.appendChild(el('path', { d: bellyD, fill: coat.light, opacity: .97 }));
+    for (const n of patterns.body) bodyOverlay.appendChild(n);
+    facing.appendChild(bodyOverlay);
+    if (edgeStroke) facing.appendChild(el('path', { d: bodyD, fill: 'none', ...edgeStroke }));
     appendCatBodyAccessory(facing, accessory, pose);
-    for (const n of catAccessoryNodes(accessory, coat)) facing.appendChild(n);
+    head.appendChild(earL);
+    head.appendChild(earR);
+    head.appendChild(el('path', { d: 'M-5.8,-3.7 C-5.8,-7.6 -4.5,-10.3 -2.5,-10.3 C-1.2,-10.2 -1.1,-6.1 -2,-3.7 C-3.1,-2.1 -5,-2.2 -5.8,-3.7 Z M2.6,-3.8 C1.6,-6.2 1.7,-9.6 2.8,-9.7 C4.8,-9.7 6,-7.1 5.6,-3.5 C5,-2.1 3.4,-2.3 2.6,-3.8 Z', fill: coat.ear, opacity: .92 }));
+    head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 8.8, ry: 7.8, fill: coat.base }));
+    head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 8.8, ry: 7.8, fill: `url(#${headShadeId})` }));
+    if (edgeStroke) head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 8.8, ry: 7.8, fill: 'none', stroke: edgeStroke.stroke, 'stroke-width': edgeStroke['stroke-width'], opacity: edgeStroke.opacity }));
+    for (const n of patterns.head) head.appendChild(n);
+    head.appendChild(el('path', { d: 'M-6.1,4.2 C-4.2,7.2 4.2,7.2 6.1,4.2 C3.8,1.1 -3.8,1.1 -6.1,4.2 Z', fill: coat.light }));
+    catBlush(head, 5.3, 4.6, 1.8, 1.1);
+    catClosedEye(head, -3.5, .8, 1);
+    catClosedEye(head, 3.5, .8, 1);
+    head.appendChild(el('path', { d: 'M0,3.2 C-.9,4.7 -1.5,5.6 0,6.1 C1.5,5.6 .9,4.7 0,3.2 Z', fill: coat.nose }));
+    head.appendChild(el('path', { d: 'M0,5.8 C-1.2,6.7 -2.2,6.9 -3.1,6.6 M0,5.8 C1.2,6.7 2.2,6.9 3.1,6.6', stroke: '#7c5a55', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none' }));
+    head.appendChild(el('path', { d: 'M-5.8,5 C-9.8,4.1 -12.5,4 -14.9,5.4 M-5.4,6.4 C-9.2,6.4 -12.3,6.8 -14.7,8 M5.8,5 C9.8,4.1 12.5,4 14.9,5.4 M5.4,6.4 C9.2,6.4 12.3,6.8 14.7,8', stroke: '#6a727c', 'stroke-width': .7, 'stroke-linecap': 'round', fill: 'none', opacity: .24 }));
+    for (const n of catAccessoryNodes(accessory, coat, pose, 'head')) head.appendChild(n);
+    for (const n of catAccessoryNodes(accessory, coat, pose, 'body')) facing.appendChild(n);
+    facing.appendChild(head);
     return outer;
   }
 
-  let bodyD = 'M-11,-8 C-13,-18 -8,-27 1,-28 C11,-29 16,-22 15,-11 C14,-4 9,0 1,0 C-5,0 -9,-3 -11,-8 Z';
-  let chestD = 'M-2,-25 C-6,-21 -6,-11 -4,-5 C-1,-.2 4,-.2 6,-6 C8,-12 7,-20 3,-25 Z';
-  let tailD = 'M10,-20 C20,-28 24,-18 20,-8 C18,-2 24,3 31,-1';
-  let frontPaws = [
-    catPawPath(-4, -9, -4, -.3, pose === 'walk' ? 'step-a' : ''),
-    catPawPath(3, -9, 3, -.3, pose === 'walk' ? 'step-b' : ''),
-  ];
-  let hindMarks = [
-    el('ellipse', { cx: -6.8, cy: -1.1, rx: 3.1, ry: 1.8, fill: coat.chest, opacity: .9 }),
-    el('ellipse', { cx: 6.5, cy: -1.1, rx: 3.1, ry: 1.8, fill: coat.chest, opacity: .9 }),
-  ];
-  let headX = 1.2, headY = -31.4, tailCls = 'tail-swish', closedEyes = groom;
-
-  if (pose === 'work') {
-    bodyD = 'M-12,-8 C-13,-18 -8,-26 1,-27 C11,-28 16,-21 15,-11 C14,-4 8,-1 1,-1 C-4,-1 -9,-3 -12,-8 Z';
-    chestD = 'M-1,-24 C-5,-20 -5,-12 -3,-6 C0,-2 4,-2 6,-7 C7,-12 6,-19 3,-24 Z';
-    tailD = 'M11,-19 C19,-28 23,-19 20,-11 C18,-5 22,0 28,-3';
-    frontPaws = [catPawPath(-3, -12, -11, -18.2), catPawPath(3, -12, 1, -18.6)];
-    hindMarks = [
-      el('ellipse', { cx: -5.8, cy: -.7, rx: 3, ry: 1.7, fill: coat.chest, opacity: .9 }),
-      el('ellipse', { cx: 4.8, cy: -.7, rx: 2.8, ry: 1.6, fill: coat.chest, opacity: .9 }),
+  if (pose === 'walk') {
+    const bodyD = 'M-14.6,-11.3 C-13,-18.4 -6.1,-22.4 3.9,-22.2 C14.4,-22 20.9,-18 21.8,-11.1 C22.6,-4.6 17.6,.3 7.8,.5 C-2.2,.8 -10.4,-3.8 -14.6,-11.3 Z';
+    const chestD = 'M-3.2,-18.8 C.7,-19.9 6.7,-18.5 8.5,-13.6 C8.2,-8.8 4.6,-5.6 -1,-5.3 C-5.4,-5.8 -7.6,-9 -6.8,-14.4 C-5.7,-17.3 -4.8,-18.2 -3.2,-18.8 Z';
+    const bodyClipId = `${gradBase}-bodyclip`;
+    defs.appendChild(catBodyClipNode(bodyClipId, bodyD));
+    const head = el('g', { transform: 'translate(18.2,-18.1)' });
+    const earL = el('path', { d: 'M-7.6,-2.2 C-8.3,-8.5 -5.8,-13.5 -2.1,-13.6 C-.7,-13.4 -.4,-7.6 -1.5,-3.8 C-2.9,-.7 -6.2,-.4 -7.6,-2.2 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earL', 5.5) });
+    const earR = el('path', { d: 'M2.2,-3.1 C1.6,-8.7 4.6,-13.1 7.8,-12.9 C9,-12.7 9,-7 7.4,-3.2 C5.9,-.6 3.2,-.7 2.2,-3.1 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earR', 6.1) });
+    facing.appendChild(el('path', {
+      d: 'M10.8,-17.3 C16.1,-28.2 26.8,-29.4 30,-21 C31.8,-15.2 28,-7.5 22.1,-3.1',
+      stroke: tailColor, 'stroke-width': 5.9, 'stroke-linecap': 'round', fill: 'none', class: 'tail-swish alt',
+      style: catAnimStyle(seed, 'tail', 2.4) + 'transform-origin:34% 62%;transform-box:fill-box;',
+    }));
+    if (coat.outline) facing.appendChild(el('path', {
+      d: 'M10.8,-17.3 C16.1,-28.2 26.8,-29.4 30,-21 C31.8,-15.2 28,-7.5 22.1,-3.1',
+      stroke: coat.outline, 'stroke-width': 2.1, 'stroke-linecap': 'round', fill: 'none', opacity: .55,
+    }));
+    facing.appendChild(el('path', { d: bodyD, fill: coat.base }));
+    facing.appendChild(el('path', { d: bodyD, fill: `url(#${bodyShadeId})` }));
+    const bodyOverlay = el('g', { 'clip-path': `url(#${bodyClipId})` });
+    bodyOverlay.appendChild(el('path', { d: chestD, fill: coat.light, opacity: .97 }));
+    for (const n of patterns.body) bodyOverlay.appendChild(n);
+    facing.appendChild(bodyOverlay);
+    if (edgeStroke) facing.appendChild(el('path', { d: bodyD, fill: 'none', ...edgeStroke }));
+    appendCatBodyAccessory(facing, accessory, pose);
+    for (const n of catAccessoryNodes(accessory, coat, pose, 'body')) facing.appendChild(n);
+    const legStroke = coat.pattern === 'siamese' ? coat.dark : coat.base;
+    const legs = [
+      catLimbPath(-8.8, -10.5, -9.5, -.3, 5.1, legStroke, 'step-a'),
+      catLimbPath(-.9, -10.4, -.5, -.1, 5.1, legStroke, 'step-b'),
+      catLimbPath(8.5, -10.2, 10.9, -.1, 5.1, legStroke, 'step-b'),
+      catLimbPath(15, -10.1, 14.2, -.2, 5.1, legStroke, 'step-a'),
     ];
-    headX = 4.7; headY = -32.2;
-  } else if (pose === 'walk') {
-    bodyD = 'M-13,-10 C-11,-20 -2,-26 9,-24 C16,-23 20,-17 20,-10 C20,-3 15,0 7,0 C-1,0 -8,-3 -13,-10 Z';
-    chestD = 'M-2,-22 C1,-23 6,-22 7,-18 C6,-11 3,-7 -1,-6 C-5,-7 -6,-12 -5,-18 C-4,-20 -3,-21 -2,-22 Z';
-    tailD = 'M15,-18 C25,-26 31,-18 29,-8 C28,-1 34,2 39,-3';
-    frontPaws = [
-      catPawPath(-4, -9, -7, .1, 'step-a'),
-      catPawPath(4, -9, 7, -.7, 'step-b'),
-      catPawPath(9, -8, 13, -.1, 'step-b'),
-      catPawPath(1, -8, -1, .4, 'step-a'),
-    ];
-    hindMarks = [];
-    headX = 10.6; headY = -28.5; tailCls = 'tail-swish alt';
-  } else if (pose === 'present') {
-    bodyD = 'M-9,-6 C-10,-18 -6,-30 0,-33 C7,-30 10,-18 9,-6 C8,1 5,5 0,5 C-5,5 -8,1 -9,-6 Z';
-    chestD = 'M-2,-27 C-5,-20 -4,-8 -1,-1 C1,2 4,2 6,-1 C8,-8 7,-20 3,-27 Z';
-    tailD = 'M8,-18 C17,-24 22,-15 20,-7 C18,-1 23,5 29,3';
-    frontPaws = [
-      el('path', { d: 'M-4,-20 Q-7,-14 -6,-7', stroke: '#d6c4b4', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }),
-      el('path', { d: 'M4,-22 Q11,-26 18,-34', stroke: '#d6c4b4', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }),
-    ];
-    hindMarks = [
-      el('ellipse', { cx: -3.8, cy: 4.5, rx: 2.6, ry: 1.7, fill: coat.chest, opacity: .92 }),
-      el('ellipse', { cx: 3.8, cy: 4.5, rx: 2.6, ry: 1.7, fill: coat.chest, opacity: .92 }),
-    ];
-    headX = 1.2; headY = -37;
+    for (const leg of legs) facing.appendChild(leg);
+    facing.appendChild(catPawPad(-9.6, -.15, 2.7, 1.4));
+    facing.appendChild(catPawPad(-.5, 0, 2.7, 1.4));
+    facing.appendChild(catPawPad(10.9, 0, 2.7, 1.4));
+    facing.appendChild(catPawPad(14.3, -.05, 2.7, 1.4));
+    for (const n of patterns.front) facing.appendChild(n);
+    head.appendChild(earL);
+    head.appendChild(earR);
+    head.appendChild(el('path', { d: 'M-5.8,-3.7 C-5.7,-7.6 -4.3,-10.3 -2.2,-10.4 C-.9,-10.2 -.8,-6.3 -1.8,-3.7 C-2.9,-2.2 -5,-2.3 -5.8,-3.7 Z M2.7,-3.8 C1.8,-6.2 1.8,-9.7 2.9,-9.8 C4.9,-9.8 6.1,-7.1 5.8,-3.5 C5.2,-2.1 3.5,-2.2 2.7,-3.8 Z', fill: coat.ear, opacity: .92 }));
+    head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.4, ry: 8, fill: coat.base }));
+    head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.4, ry: 8, fill: `url(#${headShadeId})` }));
+    if (edgeStroke) head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.4, ry: 8, fill: 'none', stroke: edgeStroke.stroke, 'stroke-width': edgeStroke['stroke-width'], opacity: edgeStroke.opacity }));
+    for (const n of patterns.head) head.appendChild(n);
+    head.appendChild(el('path', { d: 'M-6.1,4.2 C-4,7.1 4,7.1 6.1,4.2 C3.5,1 -3.5,1 -6.1,4.2 Z', fill: coat.light }));
+    catBlush(head, 5.4, 4.8, 1.8, 1.05);
+    if (groom) {
+      catClosedEye(head, -3.5, .8);
+      catClosedEye(head, 3.5, .8);
+    } else {
+      catOpenEye(head, -3.7, .85, 1.05);
+      catOpenEye(head, 3.7, .85, 1.05);
+    }
+    head.appendChild(el('path', { d: 'M0,3.4 C-.9,4.9 -1.5,5.8 0,6.3 C1.5,5.8 .9,4.9 0,3.4 Z', fill: coat.nose }));
+    head.appendChild(el('path', { d: 'M0,5.9 C-1.2,7 -2.2,7.2 -3.2,6.8 M0,5.9 C1.2,7 2.2,7.2 3.2,6.8', stroke: '#7c5a55', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none' }));
+    head.appendChild(el('path', { d: 'M-6,5 C-10.2,4.1 -12.8,4 -15.1,5.2 M-5.5,6.3 C-9.1,6.3 -12.4,6.8 -14.8,8 M6,5 C10.2,4.1 12.8,4 15.1,5.2 M5.5,6.3 C9.1,6.3 12.4,6.8 14.8,8', stroke: '#6a727c', 'stroke-width': .7, 'stroke-linecap': 'round', fill: 'none', opacity: .24 }));
+    for (const n of catAccessoryNodes(accessory, coat, pose, 'head')) head.appendChild(n);
+    facing.appendChild(head);
+    if (groom) facing.appendChild(el('path', { d: 'M13.8,-11.2 C12,-7.4 10.7,-3.6 9.2,-.9', stroke: '#d7b59f', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }));
+    return outer;
   }
 
-  if (showWait && pose !== 'sleep' && pose !== 'walk') {
-    if (pose === 'work') frontPaws = [catPawPath(-3, -12, -11, -18.2), catRaisedPawNode('work')];
-    else if (pose === 'present') frontPaws = [el('path', { d: 'M-4,-20 Q-7,-14 -6,-7', stroke: '#d6c4b4', 'stroke-width': 3.2, 'stroke-linecap': 'round', fill: 'none' }), catRaisedPawNode('present')];
-    else frontPaws = [catPawPath(-4, -9, -4, -.3), catRaisedPawNode('stand')];
-  }
-
-  const tail = el('path', {
-    d: tailD,
-    stroke: coat.pattern === 'siamese' ? coat.stripe : coat.body,
-    'stroke-width': pose === 'walk' ? 4.8 : 5.2,
+  const presentPose = pose === 'present';
+  const workPose = pose === 'work';
+  const bodyD = workPose
+    ? 'M-11.8,-3.8 C-13.3,-10.8 -12,-20.3 -7.5,-25.2 C-4.8,-27.9 5.2,-28.2 8.7,-25.2 C13,-21.1 13.5,-11.3 10.7,-4.4 C8.5,-1 5.2,.8 .2,.8 C-4.6,.8 -8.9,-.4 -11.8,-3.8 Z'
+    : presentPose
+      ? 'M-10.7,-1.3 C-13.5,-8.4 -13.6,-19.2 -8.6,-25 C-5.8,-28 5.1,-28.7 9.5,-25.4 C14.3,-20.9 14.8,-9.8 11.8,-2.1 C9.1,2.6 -8,2.7 -10.7,-1.3 Z'
+      : 'M-11.6,-1.1 C-14.4,-6.8 -14.7,-18.8 -9.2,-24.7 C-6.9,-27.1 -3.8,-28.4 -.4,-28.6 C3.6,-28.8 7,-27.3 9.5,-24.6 C14.6,-19 15.1,-7.1 11.5,-1.6 C8.5,2.6 -8.1,2.7 -11.6,-1.1 Z';
+  const chestD = workPose
+    ? 'M-4.2,-20 C-6.2,-17.8 -6.1,-10.2 -3.4,-4.5 C-1.4,-2.4 2.5,-2.1 4.7,-4.8 C6.7,-9.2 6.7,-17.3 4.1,-20.3 C2.2,-21.8 -2.3,-21.7 -4.2,-20 Z'
+    : presentPose
+      ? 'M-4.7,-22 C-7.2,-19.4 -6.9,-7.4 -3.4,-1.5 C-.9,1.5 3.2,1.5 5.3,-1.5 C8.1,-8.1 7.9,-18.9 4.3,-22.3 C2.1,-23.8 -2.4,-23.8 -4.7,-22 Z'
+      : 'M-4.7,-21.7 C-7.4,-18.8 -7,-7.3 -3.3,-1.7 C-.7,1.3 3.8,1.1 6,-1.9 C8.4,-8 7.6,-18.5 4.1,-22.2 C1.8,-23.8 -2.5,-23.8 -4.7,-21.7 Z';
+  const bodyClipId = `${gradBase}-bodyclip`;
+  defs.appendChild(catBodyClipNode(bodyClipId, bodyD));
+  const headTx = workPose ? 'translate(1.4,-35.1) rotate(2.5)' : (presentPose ? 'translate(.6,-32.9)' : 'translate(.4,-29.7)');
+  const head = el('g', { transform: headTx });
+  const earL = el('path', { d: 'M-8.2,-1.8 C-9.2,-9.2 -6.7,-14.7 -2.2,-14.8 C-.8,-14.8 -.8,-8 -2,-3.5 C-3.4,-.1 -6.8,.6 -8.2,-1.8 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earL', 5.5) });
+  const earR = el('path', { d: 'M2.2,-3.1 C1.4,-9 4.8,-14.2 8.2,-14 C9.5,-13.8 9.5,-7.6 7.8,-3.2 C6.2,.2 3.3,.1 2.2,-3.1 Z', fill: earBase, class: 'ear-flick', style: catAnimStyle(seed, 'earR', 6.1) });
+  const tailPath = workPose
+    ? 'M9.7,-18.6 C16.8,-16 17.5,-6.9 12.2,-1.2 C9.6,1.7 13.4,2.1 16.8,.8'
+    : presentPose
+      ? 'M10.1,-17.5 C18.4,-14.3 19.5,-4.8 13.1,.3 C7,4.4 -3.4,3.3 -8,-.5'
+      : 'M10.4,-17.8 C18.6,-14.5 19.1,-4.9 12.2,.3 C6.2,4.3 -4.2,3.3 -8.4,-.6';
+  facing.appendChild(el('path', {
+    d: tailPath,
+    stroke: tailColor,
+    'stroke-width': presentPose ? 6.1 : 6,
     'stroke-linecap': 'round',
     fill: 'none',
-    class: tailCls,
-    style: catAnimStyle(seed, 'tail', pose === 'walk' ? 2.4 : 2.9),
-  });
-  facing.appendChild(tail);
-  facing.appendChild(el('path', { d: bodyD, fill: coat.body }));
-  facing.appendChild(el('path', { d: chestD, fill: coat.chest, opacity: .97 }));
-  for (const n of catPatternLayers(coat, pose)) facing.appendChild(n);
+    class: workPose ? 'tail-swish alt' : 'tail-swish',
+    style: catAnimStyle(seed, 'tail', workPose ? 3.2 : 2.9) + 'transform-origin:79% 34%;transform-box:fill-box;',
+  }));
+  if (coat.outline) facing.appendChild(el('path', {
+    d: tailPath,
+    stroke: coat.outline, 'stroke-width': 2.2, 'stroke-linecap': 'round', fill: 'none', opacity: .55,
+  }));
+  facing.appendChild(el('path', { d: bodyD, fill: coat.base }));
+  facing.appendChild(el('path', { d: bodyD, fill: `url(#${bodyShadeId})` }));
+  const bodyOverlay = el('g', { 'clip-path': `url(#${bodyClipId})` });
+  bodyOverlay.appendChild(el('path', { d: chestD, fill: coat.light, opacity: .97 }));
+  for (const n of patterns.body) bodyOverlay.appendChild(n);
+  facing.appendChild(bodyOverlay);
+  if (edgeStroke) facing.appendChild(el('path', { d: bodyD, fill: 'none', ...edgeStroke }));
   appendCatBodyAccessory(facing, accessory, pose);
-  for (const paw of frontPaws) facing.appendChild(paw);
-  for (const paw of hindMarks) facing.appendChild(paw);
+  for (const n of catAccessoryNodes(accessory, coat, pose, 'body')) facing.appendChild(n);
+  if (!workPose) facing.appendChild(el('path', { d: 'M-5.5,-24.2 C-3.6,-22.6 3.6,-22.6 5.5,-24.2', stroke: 'rgba(121,101,93,.18)', 'stroke-width': 1.3, 'stroke-linecap': 'round', fill: 'none' }));
 
-  const head = el('g', { transform: `translate(${headX},${headY})` });
-  const earL = el('path', {
-    d: 'M-6,-2 L-3.6,-9.3 L-1,-2.6 Z',
-    fill: coat.pattern === 'siamese' ? coat.stripe : coat.body,
-    class: 'ear-flick',
-    style: catAnimStyle(seed, 'earL', 5.5),
-  });
-  const earR = el('path', {
-    d: 'M1,-2.6 L3.7,-9.1 L6,-2 Z',
-    fill: coat.pattern === 'siamese' ? coat.stripe : coat.body,
-    class: 'ear-flick',
-    style: catAnimStyle(seed, 'earR', 6.1),
-  });
-  head.appendChild(earL);
-  head.appendChild(earR);
-  head.appendChild(el('path', { d: 'M-4.7,-3.1 L-3.4,-6.5 L-2.2,-3.9 M2.1,-3.9 L3.4,-6.5 L4.8,-3.2', fill: coat.ear, opacity: .92 }));
-  head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 7.2, ry: 6.1, fill: coat.body }));
-  head.appendChild(el('path', { d: 'M-4.6,2.4 C-2.1,5 2.1,5 4.6,2.4 C2.5,.2 -2.5,.2 -4.6,2.4 Z', fill: coat.chest }));
-  if (pose !== 'sleep') {
-    if (closedEyes) {
-      head.appendChild(el('path', { d: 'M-4.5,-1.6 q1.7,-.8 3.2,0 M1.4,-1.6 q1.7,-.8 3.2,0', stroke: '#26313a', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none' }));
+  if (workPose) {
+    facing.appendChild(catLimbPath(-6.4, -14.3, -12.6, -18.2, 5.1, '#d7b59f'));
+    facing.appendChild(catPawPad(-13.1, -18.4, 3, 1.75));
+    if (showWait) {
+      facing.appendChild(catRaisedPawNode('work'));
     } else {
-      head.appendChild(el('path', { d: catEyePath(-2.8, -1.4) + ' ' + catEyePath(2.8, -1.4), fill: coat.eye }));
-      head.appendChild(el('ellipse', { cx: -2.8, cy: -1.3, rx: .75, ry: 1.9, fill: '#1b2128' }));
-      head.appendChild(el('ellipse', { cx: 2.8, cy: -1.3, rx: .75, ry: 1.9, fill: '#1b2128' }));
+      facing.appendChild(catLimbPath(3.6, -14.8, 1.2, -18.5, 5.1, '#d7b59f'));
+      facing.appendChild(catPawPad(.8, -18.7, 3, 1.75));
+    }
+  } else {
+    facing.appendChild(catPawPad(-4.8, -.1, 3.3, 2.05));
+    if (showWait) facing.appendChild(catRaisedPawNode(presentPose ? 'present' : 'stand'));
+    else if (presentPose) {
+      facing.appendChild(el('path', { d: 'M4.2,-15.8 C8.5,-18.5 12.1,-23.3 16,-29.9', stroke: '#d7b59f', 'stroke-width': 4.5, 'stroke-linecap': 'round', fill: 'none' }));
+      facing.appendChild(catPawPad(16.5, -30.7, 2.35, 1.55));
+    } else {
+      facing.appendChild(catPawPad(4.8, -.1, 3.3, 2.05));
     }
   }
-  head.appendChild(el('path', { d: 'M0,-.2 l-1.1,1.6 h2.2 Z', fill: coat.nose }));
-  head.appendChild(el('path', { d: 'M0,1.4 q-1.2,1.1 -2.2,1.2 M0,1.4 q1.2,1.1 2.2,1.2', stroke: '#714f4c', 'stroke-width': .75, 'stroke-linecap': 'round', fill: 'none', opacity: .85 }));
-  head.appendChild(el('path', { d: 'M-4.8,1.4 l-5.2,-1 M-4.8,2.8 l-5.5,.8', stroke: '#9aa7b2', 'stroke-width': .82, 'stroke-linecap': 'round', fill: 'none', opacity: .9 }));
-  head.appendChild(el('path', { d: 'M4.8,1.4 l5.2,-1 M4.8,2.8 l5.5,.8', stroke: '#9aa7b2', 'stroke-width': .82, 'stroke-linecap': 'round', fill: 'none', opacity: .9 }));
-  for (const n of catAccessoryNodes(accessory, coat)) head.appendChild(n);
-  if (showWait && pose !== 'sleep' && pose !== 'walk') head.appendChild(catWaitBubbleNode(pose));
-  if (groom) head.appendChild(el('path', { d: 'M-3,4 q-2,3 -6,4', stroke: '#d6c4b4', 'stroke-width': 3, 'stroke-linecap': 'round', fill: 'none' }));
+  for (const n of patterns.front) facing.appendChild(n);
+
+  head.appendChild(earL);
+  head.appendChild(earR);
+  head.appendChild(el('path', { d: 'M-6.2,-3.7 C-6.2,-7.9 -4.6,-10.9 -2.3,-10.9 C-.8,-10.7 -.7,-6.3 -1.9,-3.6 C-3.2,-1.7 -5.3,-1.9 -6.2,-3.7 Z M2.6,-3.8 C1.6,-6.6 1.6,-10.2 2.9,-10.3 C5.1,-10.2 6.5,-7.2 6.1,-3.3 C5.5,-1.7 3.5,-1.8 2.6,-3.8 Z', fill: coat.ear, opacity: .93 }));
+  head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.8, ry: 8.9, fill: coat.base }));
+  head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.8, ry: 8.9, fill: `url(#${headShadeId})` }));
+  if (edgeStroke) head.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 9.8, ry: 8.9, fill: 'none', stroke: edgeStroke.stroke, 'stroke-width': edgeStroke['stroke-width'], opacity: edgeStroke.opacity }));
+  for (const n of patterns.head) head.appendChild(n);
+  head.appendChild(el('path', { d: 'M-6.4,4.4 C-4.4,7.7 4.4,7.7 6.4,4.4 C3.7,1 -3.7,1 -6.4,4.4 Z', fill: coat.light }));
+  catBlush(head, 5.8, 5.2, 1.95, 1.2);
+  if (groom) {
+    catClosedEye(head, -3.8, 1, 1.08);
+    catClosedEye(head, 3.8, 1, 1.08);
+  } else if (workPose) {
+    catScreenEye(head, -3.9, 1.2, 1.04);
+    catScreenEye(head, 3.9, 1.2, 1.04);
+  } else {
+    catOpenEye(head, -3.9, 1, 1.08);
+    catOpenEye(head, 3.9, 1, 1.08);
+  }
+  for (const n of catAccessoryNodes(accessory, coat, pose, 'head')) head.appendChild(n);
+  head.appendChild(el('path', { d: 'M0,4 C-1.05,5.7 -1.7,6.7 0,7.2 C1.7,6.7 1.05,5.7 0,4 Z', fill: coat.nose }));
+  head.appendChild(el('path', { d: 'M0,6.5 C-1.3,7.7 -2.5,8.2 -3.9,7.9 M0,6.5 C1.3,7.7 2.5,8.2 3.9,7.9', stroke: '#7c5a55', 'stroke-width': .82, 'stroke-linecap': 'round', fill: 'none' }));
+  head.appendChild(el('path', { d: 'M-6.2,5.5 C-10.7,4.4 -13.6,4.5 -16.2,5.9 M-5.9,7.1 C-10.1,7.1 -13.4,7.7 -16,9.1 M6.2,5.5 C10.7,4.4 13.6,4.5 16.2,5.9 M5.9,7.1 C10.1,7.1 13.4,7.7 16,9.1', stroke: '#6a727c', 'stroke-width': .72, 'stroke-linecap': 'round', fill: 'none', opacity: .24 }));
+  if (showWait) head.appendChild(catWaitBubbleNode(pose));
+  if (groom) head.appendChild(el('path', { d: 'M-3,8 C-5.5,10.8 -8.5,12.1 -11.8,12.7', stroke: '#d7b59f', 'stroke-width': 3, 'stroke-linecap': 'round', fill: 'none' }));
   facing.appendChild(head);
 
   return outer;
@@ -1290,17 +1442,18 @@ function workstation(p) {
   // サブエージェント: 実行中の数だけデスクに集まる(奥側の1人はデスク前に描く)
   const nAgents = p.runningAgents || 0;
   const AGENT_SPOTS = [
-    { x: -58, y: 10, flip: false, back: false },
-    { x: 58,  y: 18, flip: true,  back: false },
-    { x: -34, y: -34, flip: false, back: true },
-    { x: 44,  y: 40, flip: true,  back: false },
+    { x: -84, y: 16, flip: false, back: false, scale: .9, opacity: .98 },
+    { x: 86,  y: 18, flip: true,  back: false, scale: .88, opacity: .94 },
+    { x: -48, y: -34, flip: false, back: true,  scale: .78, opacity: .72 },
+    { x: 62,  y: 38, flip: true,  back: false, scale: .84, opacity: .88 },
   ];
   const agentsShown = Math.min(nAgents, AGENT_SPOTS.length);
   for (let i = 0; i < agentsShown; i++) {
     const sp = AGENT_SPOTS[i];
     if (!sp.back) continue; // 手前側はデスクの後に描く
     const pa = cat({ pose: 'stand', coat: catCoatKey(`${projectSeed}:agent:${i}`), anim: 'bob', flip: sp.flip, seed: `${projectSeed}:agent:${i}` });
-    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
+    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(${sp.scale || .92})`);
+    if (sp.opacity != null) pa.setAttribute('opacity', sp.opacity);
     g.appendChild(pa);
   }
 
@@ -1311,7 +1464,8 @@ function workstation(p) {
     const sp = AGENT_SPOTS[i];
     if (sp.back) continue;
     const pa = cat({ pose: 'stand', coat: catCoatKey(`${projectSeed}:agent:${i}`), anim: 'bob', flip: sp.flip, seed: `${projectSeed}:agent:${i}` });
-    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(.92)`);
+    pa.setAttribute('transform', `translate(${sp.x},${sp.y}) scale(${sp.scale || .92})`);
+    if (sp.opacity != null) pa.setAttribute('opacity', sp.opacity);
     g.appendChild(pa);
   }
 
@@ -1545,8 +1699,6 @@ function explorerStation(unread) {
   const ex = cat({ pose: 'stand', coat: 'brownTabby', accessory: 'explorer', seed: 'explorer' });
   ex.setAttribute('transform', XT);
   g.appendChild(ex);
-  // 双眼鏡を持つ手元(装飾)
-  g.appendChild(el('rect', { x: 20, y: -34, width: 7, height: 4, rx: 1.5, fill: '#2f3a44', transform: 'rotate(-8 23 -32)' }));
 
   // 吹き出し(クリック可能の合図)
   const bub = el('g', { class: 'bob', transform: 'translate(30,-84)' });
