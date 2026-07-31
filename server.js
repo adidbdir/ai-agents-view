@@ -566,9 +566,24 @@ const DEFAULT_HUSTLER_CONFIG = {
   idleMinutes: 15,
   tokenBudget5h: 2000000,
   maxRunsPerDay: 8,
+  qualityThreshold: 75,
+  maxRevisions: 2,
+  autoFromExplorer: true,
+  publish: {
+    enabled: false,
+    mode: 'zenn-git',
+    repoPath: '',
+    articleType: 'tech',
+    price: 0,
+    topics: [],
+    publishedFlag: true,
+  },
 };
 
 let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+const HUSTLER_JOB_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved', 'rejected', 'published', 'error']);
+const HUSTLER_RESTARTABLE_STATUSES = new Set(['running', 'evaluating', 'revising']);
+const HUSTLER_UNFINISHED_TOPIC_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved']);
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -617,6 +632,76 @@ function normalizeActiveHours(raw) {
   return out.join(',') || DEFAULT_HUSTLER_CONFIG.activeHours;
 }
 
+function uniqStrings(items, maxItems = 8, maxLength = 60) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(items) ? items : []) {
+    const s = String(raw || '').trim().slice(0, maxLength);
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function normalizeHustlerState(state, fallback = 'pending') {
+  if (state === 'done') return 'approved';
+  return HUSTLER_JOB_STATUSES.has(state) ? state : fallback;
+}
+
+function normalizeReviewPayload(input) {
+  if (!input || typeof input !== 'object') return null;
+  const scoreNum = Number(input.score);
+  const score = Number.isFinite(scoreNum) ? Math.max(0, Math.min(100, Math.round(scoreNum))) : null;
+  return {
+    score,
+    verdict: typeof input.verdict === 'string' ? input.verdict.trim().slice(0, 120) : '',
+    strengths: uniqStrings(input.strengths, 8, 240),
+    issues: uniqStrings(input.issues, 8, 240),
+    fixInstructions: typeof input.fixInstructions === 'string' ? input.fixInstructions.trim().slice(0, 4000) : '',
+  };
+}
+
+function normalizeStateHistory(history, fallbackState = 'pending', fallbackAt = null) {
+  const out = [];
+  for (const item of Array.isArray(history) ? history : []) {
+    if (!item || typeof item !== 'object') continue;
+    out.push({
+      state: normalizeHustlerState(item.state, fallbackState),
+      at: typeof item.at === 'string' ? item.at : (fallbackAt || new Date().toISOString()),
+      note: typeof item.note === 'string' ? item.note.slice(0, 240) : '',
+    });
+  }
+  return out;
+}
+
+function appendStateHistory(history, state, note = '', at = null) {
+  const nextAt = at || new Date().toISOString();
+  const clean = normalizeStateHistory(history, state, nextAt);
+  clean.push({
+    state: normalizeHustlerState(state),
+    at: nextAt,
+    note: typeof note === 'string' ? note.slice(0, 240) : '',
+  });
+  return clean;
+}
+
+function sanitizeHustlerPublishConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    enabled: !!src.enabled,
+    mode: src.mode === 'zenn-git' ? 'zenn-git' : 'zenn-git',
+    repoPath: typeof src.repoPath === 'string' ? src.repoPath.trim().slice(0, 1000) : '',
+    articleType: src.articleType === 'idea' ? 'idea' : 'tech',
+    price: Math.max(0, Math.min(50000, Math.round(Number(src.price) || 0))),
+    topics: uniqStrings(src.topics, 5, 40).map((s) => s.replace(/\s+/g, '-')),
+    publishedFlag: src.publishedFlag !== false,
+  };
+}
+
 function isWithinActiveHours(spec, now = new Date()) {
   const parts = String(spec || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (!parts.length) return true;
@@ -642,6 +727,10 @@ function sanitizeHustlerConfig(input) {
     idleMinutes: Math.max(1, Math.min(180, Number(src.idleMinutes) || DEFAULT_HUSTLER_CONFIG.idleMinutes)),
     tokenBudget5h: Math.max(10000, Math.min(20000000, Math.round(Number(src.tokenBudget5h) || DEFAULT_HUSTLER_CONFIG.tokenBudget5h))),
     maxRunsPerDay: Math.max(1, Math.min(48, Math.round(Number(src.maxRunsPerDay) || DEFAULT_HUSTLER_CONFIG.maxRunsPerDay))),
+    qualityThreshold: Math.max(0, Math.min(100, Math.round(Number(src.qualityThreshold) || DEFAULT_HUSTLER_CONFIG.qualityThreshold))),
+    maxRevisions: Math.max(0, Math.min(5, Math.round(Number(src.maxRevisions) || DEFAULT_HUSTLER_CONFIG.maxRevisions))),
+    autoFromExplorer: src.autoFromExplorer !== false,
+    publish: sanitizeHustlerPublishConfig({ ...DEFAULT_HUSTLER_CONFIG.publish, ...(src.publish || {}) }),
   };
 }
 
@@ -659,17 +748,28 @@ function saveHustlerConfig(config) {
 function normalizeHustlerJob(job) {
   if (!job || typeof job !== 'object') return null;
   const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(job.type) ? job.type : 'custom';
+  const createdAt = typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString();
+  const status = normalizeHustlerState(job.status, 'pending');
+  const review = normalizeReviewPayload(job.review);
   return {
     id: typeof job.id === 'string' ? job.id : makeId('job'),
     type,
     topic: typeof job.topic === 'string' ? job.topic.slice(0, 500) : '',
     prompt: typeof job.prompt === 'string' ? job.prompt.slice(0, 12000) : '',
-    status: ['pending', 'running', 'done', 'error'].includes(job.status) ? job.status : 'pending',
-    createdAt: typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString(),
+    status,
+    createdAt,
     startedAt: typeof job.startedAt === 'string' ? job.startedAt : null,
     finishedAt: typeof job.finishedAt === 'string' ? job.finishedAt : null,
     outputId: typeof job.outputId === 'string' ? job.outputId : null,
     error: typeof job.error === 'string' ? job.error.slice(0, 500) : null,
+    score: review && review.score != null ? review.score : (Number.isFinite(Number(job.score)) ? Math.max(0, Math.min(100, Math.round(Number(job.score)))) : null),
+    review,
+    revisionCount: Math.max(0, Math.min(20, Math.round(Number(job.revisionCount) || 0))),
+    stateHistory: normalizeStateHistory(job.stateHistory, status, createdAt),
+    slug: typeof job.slug === 'string' ? job.slug.slice(0, 60) : null,
+    publishedAt: typeof job.publishedAt === 'string' ? job.publishedAt : null,
+    publishError: typeof job.publishError === 'string' ? job.publishError.slice(0, 500) : null,
+    source: typeof job.source === 'string' ? job.source.slice(0, 80) : '',
   };
 }
 
@@ -688,9 +788,10 @@ function resetStaleHustlerJobs() {
   const jobs = loadHustlerJobs();
   let changed = false;
   for (const job of jobs) {
-    if (job.status === 'running') {
+    if (HUSTLER_RESTARTABLE_STATUSES.has(job.status)) {
       job.status = 'pending';
       job.error = 'サーバー再起動により待機へ戻しました';
+      job.stateHistory = appendStateHistory(job.stateHistory, 'pending', 'サーバー再起動により待機へ戻しました');
       changed = true;
     }
   }
@@ -787,6 +888,33 @@ function loadHustlerProviderConfig() {
   return { mode, apiKey: base.apiKey, model, cli: base.cli };
 }
 
+function transitionHustlerJob(job, state, extra = {}, note = '') {
+  const nextState = normalizeHustlerState(state, job.status || 'pending');
+  const at = extra.finishedAt || extra.startedAt || new Date().toISOString();
+  return normalizeHustlerJob({
+    ...job,
+    ...extra,
+    status: nextState,
+    stateHistory: appendStateHistory(extra.stateHistory != null ? extra.stateHistory : job.stateHistory, nextState, note, at),
+  });
+}
+
+function replaceHustlerJob(jobs, job) {
+  const idx = jobs.findIndex((x) => x.id === job.id);
+  if (idx >= 0) jobs[idx] = normalizeHustlerJob(job);
+  return idx;
+}
+
+function updateHustlerJobById(jobId, updater) {
+  const jobs = loadHustlerJobs();
+  const idx = jobs.findIndex((j) => j.id === jobId);
+  if (idx < 0) return null;
+  const next = normalizeHustlerJob(updater(jobs[idx]));
+  jobs[idx] = next;
+  saveHustlerJobs(jobs);
+  return next;
+}
+
 async function runClaudeApiText({ apiKey, model, system, prompt, maxTokens = 2200 }) {
   const ar = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -838,6 +966,10 @@ function hustlerSystemPrompt() {
 - 常に日本語で出力する。`;
 }
 
+function hustlerReviewSystemPrompt() {
+  return `あなたは技術記事ドラフトの審査担当です。返答は JSON のみで、コードフェンス・前置き・補足説明を付けません。`;
+}
+
 function buildHustlerJobPrompt(job) {
   const subject = (job.topic || job.prompt || '').trim();
   const explorerBits = job.type === 'article_draft' ? pickExplorerContext(subject) : [];
@@ -864,7 +996,11 @@ Zenn / 技術ブログ向けの Markdown 記事ドラフトを作ってくださ
 トーン:
 - 実務的で読みやすい
 - 誇張しすぎない
-- 箇条書きに逃げず、本文は段落としてしっかり書く${explorerText}`,
+- 箇条書きに逃げず、本文は段落としてしっかり書く
+
+出力ルール:
+- 記事末尾に 1 行だけ HTML コメントで次の形式を必ず追加する: <!-- HUSTLER_META {"title":"公開用タイトル","emoji":"📝","topics":["topic1","topic2"]} -->
+- title は実際に公開したい最有力タイトル1本、emoji は記事内容に合う絵文字1文字、topics は記事に合う短いトピックを最大5個${explorerText}`,
       useResearch: false,
     };
   }
@@ -912,26 +1048,102 @@ Zenn / 技術ブログ向けの Markdown 記事ドラフトを作ってくださ
   };
 }
 
-function outputFrontMatter(job, createdAt) {
-  const lines = [
-    '---',
-    `type: ${job.type}`,
-    `topic: ${JSON.stringify(job.topic || job.prompt || '')}`,
-    `createdAt: ${createdAt}`,
-    `jobId: ${job.id}`,
-    '---',
-    '',
-  ];
-  return lines.join('\n');
+function buildHustlerReviewPrompt(job, content, qualityThreshold = 75) {
+  return `次の技術記事ドラフトを、日本語読者向けに厳しく審査してください。
+
+採点ルーブリック(各20点、合計100点):
+- 正確性
+- 独自性・具体性
+- 構成・読みやすさ
+- タイトル訴求力
+- 需要(検索・SNSでの関心)
+
+判定ルール:
+- ${qualityThreshold}点以上を合格候補として verdict を "pass"、未満を "revise" にしてください
+- strengths と issues はそれぞれ箇条書き文字列の配列
+- fixInstructions は、次回の書き直しにそのまま使える具体的な改善指示を 1 つの文字列で返してください
+- JSON 以外は返さない
+
+ジョブ種別: ${job.type}
+テーマ: ${(job.topic || job.prompt || '').trim() || '未指定'}
+
+ドラフト本文:
+${content}`;
 }
 
-function saveHustlerOutput(job, content) {
-  ensureHustlerStorage();
-  const outputId = makeId('out');
-  const createdAt = new Date().toISOString();
-  const body = outputFrontMatter(job, createdAt) + String(content || '').trim() + '\n';
-  fs.writeFileSync(path.join(HUSTLER_OUTPUTS_DIR, `${outputId}.md`), body);
-  return { outputId, createdAt };
+function buildHustlerRevisionPrompt(job, draft, review, revisionCount) {
+  return `次の技術記事ドラフトを、日本語の技術ブログ記事として全面的に書き直してください。
+
+要件:
+- 元のテーマと読者層は維持する
+- 指摘をすべて反映し、具体例と実務的な価値を増やす
+- 本文は読み物として自然な段落中心で書く
+- 記事末尾に 1 行だけ HTML コメントで次の形式を必ず追加する: <!-- HUSTLER_META {"title":"公開用タイトル","emoji":"📝","topics":["topic1","topic2"]} -->
+
+今回の改善指示:
+${review && review.fixInstructions ? review.fixInstructions : '具体性・構成・タイトル訴求力を改善してください。'}
+
+主な課題:
+${(review && review.issues && review.issues.length) ? review.issues.map((x) => `- ${x}`).join('\n') : '- 特記事項なし'}
+
+元ドラフト:
+${draft}
+
+これは ${revisionCount} 回目のリライトです。出力は修正版 Markdown 本文のみ。`;
+}
+
+function stripHustlerMetaComment(md) {
+  return String(md || '').replace(/\n?<!--\s*HUSTLER_META\s*(\{[\s\S]*?\})\s*-->\s*$/m, '').trim();
+}
+
+function extractHustlerEmbeddedMeta(md) {
+  const m = String(md || '').match(/<!--\s*HUSTLER_META\s*(\{[\s\S]*?\})\s*-->\s*$/m);
+  if (!m) return {};
+  try {
+    const parsed = JSON.parse(m[1]);
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title.trim().slice(0, 160) : '',
+      emoji: typeof parsed.emoji === 'string' ? parsed.emoji.trim().slice(0, 8) : '',
+      topics: uniqStrings(parsed.topics, 5, 40).map((s) => s.replace(/\s+/g, '-')),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function deriveArticleTitle(body, fallback) {
+  const meta = extractHustlerEmbeddedMeta(body);
+  if (meta.title) return meta.title;
+  const cleaned = stripHustlerMetaComment(body);
+  for (const line of cleaned.split('\n')) {
+    const h1 = line.match(/^#\s+(.+)$/);
+    if (h1) return h1[1].trim().slice(0, 160);
+    const item = line.match(/^\s*[-*]\s+(.+)$/);
+    if (item) return item[1].trim().slice(0, 160);
+  }
+  return (fallback || '無題の記事').trim().slice(0, 160);
+}
+
+function deriveArticleTopics(body, seedTopics = []) {
+  const meta = extractHustlerEmbeddedMeta(body);
+  if (meta.topics && meta.topics.length) return meta.topics.slice(0, 5);
+  const out = uniqStrings(seedTopics, 5, 40).map((s) => s.replace(/\s+/g, '-'));
+  return out.slice(0, 5);
+}
+
+function deriveArticleEmoji(body) {
+  const meta = extractHustlerEmbeddedMeta(body);
+  return meta.emoji || '📝';
+}
+
+function outputFrontMatter(meta) {
+  const lines = ['---'];
+  for (const [key, value] of Object.entries(meta || {})) {
+    if (value === undefined) continue;
+    lines.push(`${key}: ${JSON.stringify(value)}`);
+  }
+  lines.push('---', '');
+  return lines.join('\n');
 }
 
 function parseOutputFile(filePath) {
@@ -946,10 +1158,129 @@ function parseOutputFile(filePath) {
       if (idx < 0) continue;
       const key = line.slice(0, idx).trim();
       const value = line.slice(idx + 1).trim();
-      meta[key] = value.startsWith('"') ? JSON.parse(value) : value;
+      try { meta[key] = JSON.parse(value); }
+      catch { meta[key] = value; }
     }
   }
   return { meta, body };
+}
+
+function normalizeHustlerOutputRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const createdAt = typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString();
+  const review = normalizeReviewPayload(record.review);
+  const body = typeof record.body === 'string' ? record.body : '';
+  const rawBody = typeof record.rawBody === 'string' ? record.rawBody : body;
+  const cleanBody = stripHustlerMetaComment(body);
+  return {
+    id: typeof record.id === 'string' ? record.id : makeId('out'),
+    type: ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(record.type) ? record.type : 'custom',
+    topic: typeof record.topic === 'string' ? record.topic : '',
+    createdAt,
+    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : createdAt,
+    jobId: typeof record.jobId === 'string' ? record.jobId : null,
+    state: normalizeHustlerState(record.state, 'approved'),
+    history: normalizeStateHistory(record.history, record.state || 'approved', createdAt),
+    review,
+    score: review && review.score != null ? review.score : (Number.isFinite(Number(record.score)) ? Math.max(0, Math.min(100, Math.round(Number(record.score)))) : null),
+    verdict: review ? review.verdict : (typeof record.verdict === 'string' ? record.verdict.slice(0, 120) : ''),
+    strengths: review ? review.strengths : uniqStrings(record.strengths, 8, 240),
+    issues: review ? review.issues : uniqStrings(record.issues, 8, 240),
+    fixInstructions: review ? review.fixInstructions : (typeof record.fixInstructions === 'string' ? record.fixInstructions.slice(0, 4000) : ''),
+    revisionCount: Math.max(0, Math.min(20, Math.round(Number(record.revisionCount) || 0))),
+    publishedAt: typeof record.publishedAt === 'string' ? record.publishedAt : null,
+    slug: typeof record.slug === 'string' ? record.slug.slice(0, 60) : null,
+    publishError: typeof record.publishError === 'string' ? record.publishError.slice(0, 500) : null,
+    publishAttemptedAt: typeof record.publishAttemptedAt === 'string' ? record.publishAttemptedAt : null,
+    emoji: typeof record.emoji === 'string' && record.emoji.trim() ? record.emoji.trim().slice(0, 8) : deriveArticleEmoji(rawBody),
+    articleTitle: typeof record.articleTitle === 'string' && record.articleTitle.trim()
+      ? record.articleTitle.trim().slice(0, 160)
+      : deriveArticleTitle(rawBody, record.topic || record.type || '無題の記事'),
+    articleTopics: uniqStrings(record.articleTopics, 5, 40).map((s) => s.replace(/\s+/g, '-')).length
+      ? uniqStrings(record.articleTopics, 5, 40).map((s) => s.replace(/\s+/g, '-'))
+      : deriveArticleTopics(rawBody, []),
+    body: cleanBody,
+    rawBody,
+    preview: cleanBody.split('\n').find((line) => line.trim())?.slice(0, 120) || '',
+  };
+}
+
+function readHustlerOutputRecord(outputId) {
+  if (!/^[a-z0-9-]+$/i.test(outputId || '')) return null;
+  const filePath = path.join(HUSTLER_OUTPUTS_DIR, `${outputId}.md`);
+  if (!fs.existsSync(filePath)) return null;
+  const { meta, body } = parseOutputFile(filePath);
+  return normalizeHustlerOutputRecord({ id: outputId, ...meta, body, rawBody: body });
+}
+
+function saveHustlerOutputRecord(output) {
+  ensureHustlerStorage();
+  const clean = normalizeHustlerOutputRecord(output);
+  if (!clean) return null;
+  const { id, body, rawBody, preview, ...meta } = clean;
+  const filePath = path.join(HUSTLER_OUTPUTS_DIR, `${id}.md`);
+  fs.writeFileSync(filePath, outputFrontMatter(meta) + String(rawBody || body || '').trim() + '\n');
+  return normalizeHustlerOutputRecord({ ...meta, id, body: rawBody, rawBody });
+}
+
+function createHustlerOutput(job, content, extra = {}) {
+  const outputId = makeId('out');
+  const createdAt = extra.createdAt || new Date().toISOString();
+  const rawBody = String(content || '').trim();
+  const state = normalizeHustlerState(extra.state, 'approved');
+  const output = saveHustlerOutputRecord({
+    id: outputId,
+    type: job.type,
+    topic: job.topic || job.prompt || '',
+    createdAt,
+    updatedAt: createdAt,
+    jobId: job.id,
+    state,
+    history: appendStateHistory([], state, extra.note || '', createdAt),
+    review: extra.review || null,
+    score: extra.score != null ? extra.score : null,
+    revisionCount: Math.max(0, Math.round(Number(extra.revisionCount) || 0)),
+    publishError: extra.publishError || null,
+    slug: extra.slug || null,
+    publishedAt: extra.publishedAt || null,
+    emoji: extra.emoji || deriveArticleEmoji(rawBody),
+    articleTitle: extra.articleTitle || deriveArticleTitle(rawBody, job.topic || job.prompt || '無題の記事'),
+    articleTopics: extra.articleTopics || deriveArticleTopics(rawBody, [job.topic].filter(Boolean)),
+    body: rawBody,
+    rawBody,
+  });
+  return output;
+}
+
+function updateHustlerOutputRecord(outputId, updater) {
+  const current = readHustlerOutputRecord(outputId);
+  if (!current) return null;
+  const patch = updater(current) || current;
+  return saveHustlerOutputRecord({ ...current, ...patch, id: outputId });
+}
+
+function transitionHustlerOutput(output, state, extra = {}, note = '') {
+  const nextState = normalizeHustlerState(state, output.state || 'approved');
+  const rawBody = extra.rawBody != null ? String(extra.rawBody) : output.rawBody;
+  const review = extra.review !== undefined ? normalizeReviewPayload(extra.review) : output.review;
+  return normalizeHustlerOutputRecord({
+    ...output,
+    ...extra,
+    state: nextState,
+    history: appendStateHistory(extra.history != null ? extra.history : output.history, nextState, note, extra.updatedAt || new Date().toISOString()),
+    updatedAt: extra.updatedAt || new Date().toISOString(),
+    review,
+    score: review && review.score != null ? review.score : (extra.score != null ? extra.score : output.score),
+    verdict: review ? review.verdict : output.verdict,
+    strengths: review ? review.strengths : output.strengths,
+    issues: review ? review.issues : output.issues,
+    fixInstructions: review ? review.fixInstructions : output.fixInstructions,
+    emoji: extra.emoji || deriveArticleEmoji(rawBody),
+    articleTitle: extra.articleTitle || deriveArticleTitle(rawBody, output.topic || output.articleTitle),
+    articleTopics: extra.articleTopics || deriveArticleTopics(rawBody, output.articleTopics || []),
+    body: rawBody,
+    rawBody,
+  });
 }
 
 function listHustlerOutputs() {
@@ -958,35 +1289,58 @@ function listHustlerOutputs() {
   try { files = fs.readdirSync(HUSTLER_OUTPUTS_DIR).filter((f) => f.endsWith('.md')); } catch { return []; }
   const out = [];
   for (const file of files) {
-    const filePath = path.join(HUSTLER_OUTPUTS_DIR, file);
     try {
-      const { meta, body } = parseOutputFile(filePath);
+      const output = readHustlerOutputRecord(file.replace(/\.md$/, ''));
+      if (!output) continue;
       out.push({
-        id: file.replace(/\.md$/, ''),
-        type: meta.type || 'custom',
-        topic: meta.topic || '',
-        createdAt: meta.createdAt || new Date(fs.statSync(filePath).mtimeMs).toISOString(),
-        jobId: meta.jobId || null,
-        preview: body.trim().split('\n').find(Boolean)?.slice(0, 120) || '',
+        id: output.id,
+        type: output.type,
+        topic: output.topic,
+        createdAt: output.createdAt,
+        updatedAt: output.updatedAt,
+        jobId: output.jobId,
+        preview: output.preview,
+        state: output.state,
+        score: output.score,
+        revisionCount: output.revisionCount,
+        strengths: output.strengths,
+        issues: output.issues,
+        slug: output.slug,
+        publishedAt: output.publishedAt,
+        articleTitle: output.articleTitle,
+        publishError: output.publishError,
       });
     } catch { /* ignore broken file */ }
   }
-  out.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  out.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
   return out;
 }
 
 function getHustlerOutput(id) {
-  if (!/^[a-z0-9-]+$/i.test(id || '')) return null;
-  const filePath = path.join(HUSTLER_OUTPUTS_DIR, `${id}.md`);
-  if (!fs.existsSync(filePath)) return null;
-  const { meta, body } = parseOutputFile(filePath);
+  const output = readHustlerOutputRecord(id);
+  if (!output) return null;
   return {
-    id,
-    type: meta.type || 'custom',
-    topic: meta.topic || '',
-    createdAt: meta.createdAt || null,
-    jobId: meta.jobId || null,
-    body,
+    id: output.id,
+    type: output.type,
+    topic: output.topic,
+    createdAt: output.createdAt,
+    updatedAt: output.updatedAt,
+    jobId: output.jobId,
+    body: output.body,
+    state: output.state,
+    score: output.score,
+    verdict: output.verdict,
+    strengths: output.strengths,
+    issues: output.issues,
+    fixInstructions: output.fixInstructions,
+    revisionCount: output.revisionCount,
+    slug: output.slug,
+    publishedAt: output.publishedAt,
+    publishError: output.publishError,
+    emoji: output.emoji,
+    articleTitle: output.articleTitle,
+    articleTopics: output.articleTopics,
+    history: output.history,
   };
 }
 
@@ -1000,6 +1354,256 @@ function summarizeRevenueByMonth(items) {
   return [...map.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([month, total]) => ({ month, total }));
+}
+
+function normalizeTopicKey(topic) {
+  return String(topic || '').trim().toLowerCase();
+}
+
+function hasUnfinishedHustlerJobForTopic(topic) {
+  const key = normalizeTopicKey(topic);
+  if (!key) return false;
+  return loadHustlerJobs().some((job) => (
+    job.type === 'article_draft'
+    && HUSTLER_UNFINISHED_TOPIC_STATUSES.has(job.status)
+    && normalizeTopicKey(job.topic) === key
+  ));
+}
+
+function enqueueHustlerJob(input, opts = {}) {
+  const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(input && input.type) ? input.type : 'custom';
+  const topic = typeof input.topic === 'string' ? input.topic.trim().slice(0, 500) : '';
+  const prompt = typeof input.prompt === 'string' ? input.prompt.trim().slice(0, 12000) : '';
+  if (type === 'custom' ? !prompt : !topic) {
+    throw new Error(type === 'custom' ? 'プロンプトを入力してください' : 'トピックを入力してください');
+  }
+  if (opts.dedupeTopic && type === 'article_draft' && hasUnfinishedHustlerJobForTopic(topic)) {
+    const existing = loadHustlerJobs().find((job) => (
+      job.type === 'article_draft'
+      && HUSTLER_UNFINISHED_TOPIC_STATUSES.has(job.status)
+      && normalizeTopicKey(job.topic) === normalizeTopicKey(topic)
+    ));
+    return { queued: false, job: existing || null };
+  }
+  const createdAt = new Date().toISOString();
+  const job = normalizeHustlerJob({
+    id: makeId('job'),
+    type,
+    topic,
+    prompt,
+    status: 'pending',
+    createdAt,
+    stateHistory: appendStateHistory([], 'pending', opts.note || '', createdAt),
+    source: opts.source || '',
+  });
+  const jobs = loadHustlerJobs();
+  jobs.push(job);
+  saveHustlerJobs(jobs);
+  return { queued: true, job };
+}
+
+function extractPublishBodyFromDraft(body) {
+  const clean = stripHustlerMetaComment(body);
+  const lines = clean.split('\n');
+  const idx = lines.findIndex((line) => /^#\s*本文\s*$/.test(line.trim()));
+  if (idx >= 0) {
+    const extracted = lines.slice(idx + 1).join('\n').trim();
+    if (extracted) return extracted;
+  }
+  return clean.trim();
+}
+
+function stripJsonCodeFence(text) {
+  let s = String(text || '').trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  return s.trim();
+}
+
+function parseHustlerEvaluation(text) {
+  const parsed = JSON.parse(stripJsonCodeFence(text));
+  const review = normalizeReviewPayload(parsed);
+  if (!review || review.score == null) throw new Error('評価JSONの形式が不正です');
+  return review;
+}
+
+async function runHustlerTextTask({ cfg, prompt, system, maxTokens = 2200 }) {
+  if (cfg.mode === 'cli') {
+    return runClaudeCli({ cli: cfg.cli, model: cfg.model, system, prompt });
+  }
+  return runClaudeApiText({ apiKey: cfg.apiKey, model: cfg.model, system, prompt, maxTokens });
+}
+
+async function generateHustlerContent(job, cfg, task) {
+  if (task.useResearch && cfg.mode === 'api') {
+    return runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt: task.prompt });
+  }
+  if (task.useResearch && cfg.mode === 'cli') {
+    return runResearchCli({ cli: cfg.cli, model: cfg.model, prompt: task.prompt });
+  }
+  return runHustlerTextTask({ cfg, system: hustlerSystemPrompt(), prompt: task.prompt, maxTokens: 2600 });
+}
+
+async function evaluateArticleDraft(job, content, cfg, qualityThreshold) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await runHustlerTextTask({
+      cfg,
+      system: hustlerReviewSystemPrompt(),
+      prompt: buildHustlerReviewPrompt(job, content, qualityThreshold),
+      maxTokens: 900,
+    });
+    try {
+      return parseHustlerEvaluation(raw);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('評価JSONの解析に失敗しました');
+}
+
+function makeZennSlug() {
+  const seed = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`.replace(/[^a-z0-9_-]/g, '');
+  const base = `article-${seed}`.slice(0, 50);
+  return base.length >= 12 ? base : `${base}${Math.random().toString(36).slice(2, 14 - base.length)}`;
+}
+
+function zennYamlString(value) {
+  return JSON.stringify(String(value || ''));
+}
+
+function buildZennArticleContent(output, publishConfig, slug) {
+  const title = deriveArticleTitle(output.rawBody, output.topic || '無題の記事');
+  const emoji = output.emoji || deriveArticleEmoji(output.rawBody);
+  const topics = uniqStrings([...(output.articleTopics || []), ...(publishConfig.topics || [])], 5, 40)
+    .map((s) => s.replace(/\s+/g, '-'))
+    .slice(0, 5);
+  const body = extractPublishBodyFromDraft(output.rawBody || output.body);
+  const frontMatter = [
+    '---',
+    `title: ${zennYamlString(title)}`,
+    `emoji: ${zennYamlString(emoji)}`,
+    `type: ${zennYamlString(publishConfig.articleType)}`,
+    `topics: ${JSON.stringify(topics)}`,
+    `published: ${publishConfig.publishedFlag ? 'true' : 'false'}`,
+    ...(publishConfig.price > 0 ? [`price: ${publishConfig.price}`] : []),
+    '---',
+    '',
+    body,
+    '',
+  ];
+  return { slug, title, emoji, topics, body, content: frontMatter.join('\n') };
+}
+
+function runSpawn(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, { env: process.env, cwd: options.cwd || process.cwd() });
+    } catch (e) {
+      reject(new Error(`${command} 起動失敗: ${e.message}`));
+      return;
+    }
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => reject(new Error(`${command} 起動失敗: ${e.message}`)));
+    child.on('close', (code) => {
+      if (code === 0) { resolve({ out, err }); return; }
+      reject(new Error(`${command} ${args.join(' ')} failed: ${(err || out || `exit ${code}`).trim().slice(0, 300)}`));
+    });
+  });
+}
+
+async function gitCommitMaybe(repoPath, message) {
+  try {
+    await runSpawn('git', ['-C', repoPath, 'commit', '-m', message]);
+  } catch (e) {
+    if (/nothing to commit|working tree clean/i.test(String(e.message))) return;
+    throw e;
+  }
+}
+
+async function publishHustlerOutput(outputId, options = {}) {
+  const config = sanitizeHustlerConfig(options.config || loadHustlerConfig());
+  const publishConfig = config.publish || DEFAULT_HUSTLER_CONFIG.publish;
+  if (!publishConfig.repoPath) throw new Error('Zenn リポジトリパスが未設定です');
+
+  const existing = readHustlerOutputRecord(outputId);
+  if (!existing) throw new Error('成果物が見つかりません');
+  if (existing.state !== 'approved') {
+    throw new Error('approved 状態の成果物のみ公開できます');
+  }
+
+  const attemptAt = new Date().toISOString();
+  const slug = existing.slug || makeZennSlug();
+  const updated = saveHustlerOutputRecord(transitionHustlerOutput(existing, 'approved', {
+    slug,
+    publishAttemptedAt: attemptAt,
+    publishError: null,
+    updatedAt: attemptAt,
+  }, options.manual ? '手動公開を開始' : '自動公開を開始'));
+  if (updated.jobId) {
+    updateHustlerJobById(updated.jobId, (job) => transitionHustlerJob(job, 'approved', {
+      slug,
+      publishError: null,
+      score: updated.score,
+      review: updated.review,
+      outputId: updated.id,
+    }, options.manual ? '手動公開を開始' : '自動公開を開始'));
+  }
+
+  const repoPath = publishConfig.repoPath;
+  ensureDir(path.join(repoPath, 'articles'));
+  const article = buildZennArticleContent(updated, publishConfig, slug);
+  fs.writeFileSync(path.join(repoPath, 'articles', `${slug}.md`), article.content);
+
+  try {
+    await runSpawn('git', ['-C', repoPath, 'add', path.join('articles', `${slug}.md`)]);
+    await gitCommitMaybe(repoPath, `Publish ${slug}`);
+    await runSpawn('git', ['-C', repoPath, 'push']);
+    const publishedAt = new Date().toISOString();
+    const out = saveHustlerOutputRecord(transitionHustlerOutput(updated, 'published', {
+      slug,
+      publishedAt,
+      publishAttemptedAt: attemptAt,
+      publishError: null,
+      articleTitle: article.title,
+      articleTopics: article.topics,
+      emoji: article.emoji,
+      updatedAt: publishedAt,
+    }, options.manual ? '手動公開に成功' : '自動公開に成功'));
+    if (out.jobId) {
+      updateHustlerJobById(out.jobId, (job) => transitionHustlerJob(job, 'published', {
+        outputId: out.id,
+        finishedAt: publishedAt,
+        slug,
+        publishedAt,
+        publishError: null,
+        score: out.score,
+        review: out.review,
+      }, options.manual ? '手動公開に成功' : '自動公開に成功'));
+    }
+    return out;
+  } catch (e) {
+    const errorText = String(e.message || e).slice(0, 500);
+    const out = saveHustlerOutputRecord(transitionHustlerOutput(updated, 'approved', {
+      slug,
+      publishAttemptedAt: attemptAt,
+      publishError: errorText,
+      updatedAt: new Date().toISOString(),
+    }, `公開失敗: ${errorText}`));
+    if (out.jobId) {
+      updateHustlerJobById(out.jobId, (job) => transitionHustlerJob(job, 'approved', {
+        outputId: out.id,
+        slug,
+        publishError: errorText,
+        score: out.score,
+        review: out.review,
+      }, `公開失敗: ${errorText}`));
+    }
+    throw new Error(errorText);
+  }
 }
 
 function getHustlerStatus() {
@@ -1039,6 +1643,10 @@ function getHustlerStatus() {
     withinHours,
     runsToday,
     maxRunsPerDay: config.maxRunsPerDay,
+    qualityThreshold: config.qualityThreshold,
+    maxRevisions: config.maxRevisions,
+    autoFromExplorer: config.autoFromExplorer,
+    publish: config.publish,
     canRun,
     pendingJobs,
     lastRun,
@@ -1058,58 +1666,153 @@ async function executeHustlerJob(jobId) {
   const jobs = loadHustlerJobs();
   const idx = jobs.findIndex((j) => j.id === jobId);
   if (idx < 0) throw new Error('ジョブが見つかりません');
-  if (jobs[idx].status === 'running') throw new Error('このジョブはすでに実行中です');
+  if (HUSTLER_RESTARTABLE_STATUSES.has(jobs[idx].status)) throw new Error('このジョブはすでに実行中です');
 
-  jobs[idx] = {
-    ...jobs[idx],
-    status: 'running',
-    startedAt: new Date().toISOString(),
+  const config = loadHustlerConfig();
+  const startedAt = jobs[idx].startedAt || new Date().toISOString();
+  jobs[idx] = transitionHustlerJob(jobs[idx], 'running', {
+    startedAt,
     finishedAt: null,
     error: null,
-  };
+    publishError: null,
+  }, '生成開始');
   saveHustlerJobs(jobs);
 
   hustlerRunning = true;
   try {
-    const job = jobs[idx];
+    let job = jobs[idx];
     const task = buildHustlerJobPrompt(job);
-    let content;
-    if (task.useResearch && cfg.mode === 'api') {
-      content = await runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt: task.prompt });
-    } else if (task.useResearch && cfg.mode === 'cli') {
-      content = await runResearchCli({ cli: cfg.cli, model: cfg.model, prompt: task.prompt });
-    } else if (cfg.mode === 'cli') {
-      content = await runClaudeCli({ cli: cfg.cli, model: cfg.model, system: hustlerSystemPrompt(), prompt: task.prompt });
-    } else {
-      content = await runClaudeApiText({ apiKey: cfg.apiKey, model: cfg.model, system: hustlerSystemPrompt(), prompt: task.prompt });
-    }
-    const saved = saveHustlerOutput(job, content || '(成果物が空でした)');
-    const nextJobs = loadHustlerJobs();
-    const nextIdx = nextJobs.findIndex((j) => j.id === job.id);
-    if (nextIdx >= 0) {
-      nextJobs[nextIdx] = {
-        ...nextJobs[nextIdx],
-        status: 'done',
-        finishedAt: saved.createdAt,
-        outputId: saved.outputId,
+    const content = await generateHustlerContent(job, cfg, task);
+    let output = createHustlerOutput(job, content || '(成果物が空でした)', {
+      state: job.type === 'article_draft' ? 'evaluating' : 'approved',
+      note: job.type === 'article_draft' ? 'ドラフト生成完了' : '成果物生成完了',
+    });
+    job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, job.type === 'article_draft' ? 'evaluating' : 'approved', {
+      outputId: output.id,
+      score: null,
+      review: null,
+      revisionCount: 0,
+      error: null,
+      finishedAt: job.type === 'article_draft' ? null : output.createdAt,
+    }, job.type === 'article_draft' ? 'ドラフト生成完了' : '成果物生成完了')) || job;
+
+    if (job.type !== 'article_draft') return job;
+
+    let draft = output.rawBody;
+    for (let revisionIndex = 0; revisionIndex <= config.maxRevisions; revisionIndex++) {
+      output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
+        revisionCount: revisionIndex,
+      }, revisionIndex > 0 ? `リライト ${revisionIndex} 回目の評価` : '初回評価'));
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'evaluating', {
+        outputId: output.id,
+        revisionCount: revisionIndex,
         error: null,
-      };
-      saveHustlerJobs(nextJobs);
-      return nextJobs[nextIdx];
+      }, revisionIndex > 0 ? `リライト ${revisionIndex} 回目の評価` : '初回評価')) || job;
+
+      const review = await evaluateArticleDraft(job, stripHustlerMetaComment(draft), cfg, config.qualityThreshold);
+      output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
+        review,
+        score: review.score,
+        revisionCount: revisionIndex,
+      }, `評価完了 ${review.score}点`));
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'evaluating', {
+        outputId: output.id,
+        review,
+        score: review.score,
+        revisionCount: revisionIndex,
+      }, `評価完了 ${review.score}点`)) || job;
+
+      if (review.score >= config.qualityThreshold) {
+        const approvedAt = new Date().toISOString();
+        output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'approved', {
+          review,
+          score: review.score,
+          revisionCount: revisionIndex,
+          updatedAt: approvedAt,
+        }, `審査合格 ${review.score}点`));
+        job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'approved', {
+          outputId: output.id,
+          review,
+          score: review.score,
+          revisionCount: revisionIndex,
+          finishedAt: approvedAt,
+          publishError: null,
+        }, `審査合格 ${review.score}点`)) || job;
+        if (config.publish.enabled && config.publish.repoPath) {
+          try {
+            await publishHustlerOutput(output.id, { config, manual: false });
+          } catch (e) {
+            console.error('[hustler] 自動公開失敗:', e.message);
+          }
+        }
+        return loadHustlerJobs().find((j) => j.id === job.id) || job;
+      }
+
+      if (revisionIndex >= config.maxRevisions) {
+        const rejectedAt = new Date().toISOString();
+        output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'rejected', {
+          review,
+          score: review.score,
+          revisionCount: revisionIndex,
+          updatedAt: rejectedAt,
+        }, `見送り ${review.score}点`));
+        job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'rejected', {
+          outputId: output.id,
+          review,
+          score: review.score,
+          revisionCount: revisionIndex,
+          finishedAt: rejectedAt,
+        }, `見送り ${review.score}点`)) || job;
+        return job;
+      }
+
+      const nextRevision = revisionIndex + 1;
+      output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'revising', {
+        review,
+        score: review.score,
+        revisionCount: nextRevision,
+      }, `リライト ${nextRevision} 回目`));
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'revising', {
+        outputId: output.id,
+        review,
+        score: review.score,
+        revisionCount: nextRevision,
+      }, `リライト ${nextRevision} 回目`)) || job;
+
+      draft = await runHustlerTextTask({
+        cfg,
+        system: hustlerSystemPrompt(),
+        prompt: buildHustlerRevisionPrompt(job, stripHustlerMetaComment(draft), review, nextRevision),
+        maxTokens: 2600,
+      });
+      output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'revising', {
+        review,
+        score: review.score,
+        revisionCount: nextRevision,
+        rawBody: draft || '(リライト結果が空でした)',
+      }, `リライト ${nextRevision} 回目完了`));
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'revising', {
+        outputId: output.id,
+        review,
+        score: review.score,
+        revisionCount: nextRevision,
+      }, `リライト ${nextRevision} 回目完了`)) || job;
     }
-    return { ...job, status: 'done', finishedAt: saved.createdAt, outputId: saved.outputId };
+    return job;
   } catch (e) {
-    const nextJobs = loadHustlerJobs();
-    const nextIdx = nextJobs.findIndex((j) => j.id === jobId);
-    if (nextIdx >= 0) {
-      nextJobs[nextIdx] = {
-        ...nextJobs[nextIdx],
-        status: 'error',
-        finishedAt: new Date().toISOString(),
-        error: String(e.message || e).slice(0, 500),
-      };
-      saveHustlerJobs(nextJobs);
+    const current = loadHustlerJobs().find((j) => j.id === jobId);
+    if (current && current.outputId) {
+      const output = readHustlerOutputRecord(current.outputId);
+      if (output) {
+        saveHustlerOutputRecord(transitionHustlerOutput(output, 'error', {
+          publishError: String(e.message || e).slice(0, 500),
+        }, `エラー: ${String(e.message || e).slice(0, 200)}`));
+      }
     }
+    updateHustlerJobById(jobId, (job) => transitionHustlerJob(job, 'error', {
+      finishedAt: new Date().toISOString(),
+      error: String(e.message || e).slice(0, 500),
+    }, `エラー: ${String(e.message || e).slice(0, 200)}`));
     throw e;
   } finally {
     hustlerRunning = false;
@@ -1198,6 +1901,19 @@ async function runResearchApi({ apiKey, model, prompt }) {
 }
 
 /** トピックを調査してレポートを返し、結果を explorer-state に保存する */
+function maybeQueueHustlerFromExplorer(topic) {
+  const config = loadHustlerConfig();
+  if (!config.autoFromExplorer) return null;
+  return enqueueHustlerJob({
+    type: 'article_draft',
+    topic,
+  }, {
+    dedupeTopic: true,
+    source: 'explorer',
+    note: '探検家の新規レポートから自動追加',
+  });
+}
+
 async function doResearch(topic) {
   const cfg = loadExplorerConfig();
   const prompt = researchPrompt(topic);
@@ -1217,6 +1933,7 @@ async function doResearch(topic) {
   if (!st.topics.includes(topic)) st.topics.unshift(topic);
   st.topics = st.topics.slice(0, EXPLORER_MAX_TOPICS);
   saveExplorerState(st);
+  try { maybeQueueHustlerFromExplorer(topic); } catch (e) { console.error('[hustler] 探検家連携失敗:', e.message); }
   return { topic, report, at: st.reports[topic].at, provider };
 }
 
@@ -1989,13 +2706,20 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/hustler/config') {
-    readJsonBody(req)
-      .then((body) => {
-        const config = saveHustlerConfig(body || {});
-        sendJson(res, 200, { ok: true, config, status: getHustlerStatus() });
-      })
-      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+  if (url.pathname === '/api/hustler/config') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { config: loadHustlerConfig(), status: getHustlerStatus() });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const config = saveHustlerConfig(body || {});
+          sendJson(res, 200, { ok: true, config, status: getHustlerStatus() });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
     return;
   }
 
@@ -2008,22 +2732,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST') {
       readJsonBody(req)
         .then((body) => {
-          const type = ['article_draft', 'sns_pack', 'idea_research', 'custom'].includes(body.type) ? body.type : 'custom';
-          const topic = typeof body.topic === 'string' ? body.topic.trim().slice(0, 500) : '';
-          const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 12000) : '';
-          if (type === 'custom' ? !prompt : !topic) throw new Error(type === 'custom' ? 'プロンプトを入力してください' : 'トピックを入力してください');
-          const jobs = loadHustlerJobs();
-          const job = normalizeHustlerJob({
-            id: makeId('job'),
-            type,
-            topic,
-            prompt,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-          });
-          jobs.push(job);
-          saveHustlerJobs(jobs);
-          sendJson(res, 200, { ok: true, job });
+          const queued = enqueueHustlerJob(body || {});
+          sendJson(res, 200, { ok: true, job: queued.job });
         })
         .catch((e) => sendJson(res, 500, { error: String(e.message) }));
       return;
@@ -2035,7 +2745,7 @@ const server = http.createServer((req, res) => {
     const jobs = loadHustlerJobs();
     const idx = jobs.findIndex((j) => j.id === id);
     if (idx < 0) { sendJson(res, 404, { error: 'ジョブが見つかりません' }); return; }
-    if (jobs[idx].status === 'running') { sendJson(res, 409, { error: '実行中ジョブは削除できません' }); return; }
+    if (HUSTLER_RESTARTABLE_STATUSES.has(jobs[idx].status)) { sendJson(res, 409, { error: '実行中ジョブは削除できません' }); return; }
     const removed = jobs.splice(idx, 1)[0];
     saveHustlerJobs(jobs);
     sendJson(res, 200, { ok: true, job: removed });
@@ -2070,6 +2780,17 @@ const server = http.createServer((req, res) => {
     const output = getHustlerOutput(id);
     if (!output) { sendJson(res, 404, { error: '成果物が見つかりません' }); return; }
     sendJson(res, 200, output);
+    return;
+  }
+
+  if (req.method === 'POST' && /^\/api\/hustler\/publish\/[^/]+$/.test(url.pathname)) {
+    const outputId = decodeURIComponent(url.pathname.split('/').pop());
+    Promise.resolve()
+      .then(async () => {
+        const output = await publishHustlerOutput(outputId, { manual: true });
+        sendJson(res, 200, { ok: true, output, status: getHustlerStatus() });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;
   }
 
@@ -2146,20 +2867,59 @@ server.on('error', (e) => {
   throw e;
 });
 
-server.listen(PORT, () => {
-  console.log(`AI Agents View: http://localhost:${PORT}`);
-  console.log(`watching: ${PROJECTS_DIR}`);
-});
+function startServer() {
+  server.listen(PORT, () => {
+    console.log(`AI Agents View: http://localhost:${PORT}`);
+    console.log(`watching: ${PROJECTS_DIR}`);
+  });
 
-// ピアを起動時に温め、以降も定期更新する(/api/data はキャッシュを即返す)。
-refreshPeers();
-setInterval(refreshPeers, 5000);
+  refreshPeers();
+  setInterval(refreshPeers, 5000);
 
-// 探検家の週次調査(月曜9時)。サーバー起動中のみ動作する。
-const runWeekly = () => checkWeekly().catch((e) => console.error('[explorer] 週次エラー:', e.message));
-runWeekly();
-setInterval(runWeekly, 30 * 60 * 1000);
+  const runWeekly = () => checkWeekly().catch((e) => console.error('[explorer] 週次エラー:', e.message));
+  runWeekly();
+  setInterval(runWeekly, 30 * 60 * 1000);
 
-const runHustler = () => maybeRunHustlerScheduled().catch((e) => console.error('[hustler] 定期実行エラー:', e.message));
-runHustler();
-setInterval(runHustler, HUSTLER_CHECK_MS);
+  const runHustler = () => maybeRunHustlerScheduled().catch((e) => console.error('[hustler] 定期実行エラー:', e.message));
+  runHustler();
+  setInterval(runHustler, HUSTLER_CHECK_MS);
+}
+
+if (require.main === module) startServer();
+
+module.exports = {
+  server,
+  startServer,
+  loadHustlerConfig,
+  saveHustlerConfig,
+  loadHustlerJobs,
+  saveHustlerJobs,
+  loadHustlerRevenue,
+  saveHustlerRevenue,
+  getHustlerStatus,
+  listHustlerOutputs,
+  getHustlerOutput,
+  executeHustlerJob,
+  maybeRunHustlerScheduled,
+  publishHustlerOutput,
+  doResearch,
+  checkWeekly,
+  enqueueHustlerJob,
+  loadExplorerState,
+  loadSecretaryConfig,
+  flattenForCli,
+  runClaudeCli,
+  readHustlerOutputRecord,
+  saveHustlerOutputRecord,
+  _test: {
+    buildHustlerReviewPrompt,
+    buildHustlerRevisionPrompt,
+    parseHustlerEvaluation,
+    extractPublishBodyFromDraft,
+    makeZennSlug,
+    buildZennArticleContent,
+    maybeQueueHustlerFromExplorer,
+    transitionHustlerJob,
+    transitionHustlerOutput,
+  },
+};

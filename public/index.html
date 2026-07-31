@@ -481,7 +481,12 @@
     font-size: 10.5px; font-weight: 800; background: #edf2f7; color: #506070;
   }
   .hchip.on { background: #dbf7ee; color: #176a57; }
+  .hchip.warn { background: #fff3d8; color: #9a6308; }
   .hchip.err { background: #fdecec; color: #c0392b; }
+  .hchip.pub { background: #e7f0ff; color: #285ea8; }
+  .hchip.score-good { background: #dbf7ee; color: #176a57; }
+  .hchip.score-mid { background: #fff3d8; color: #9a6308; }
+  .hchip.score-low { background: #fdecec; color: #c0392b; }
   .hsplit { display: grid; grid-template-columns: 170px 1fr; gap: 12px; min-height: 420px; }
   .hout-list { display: flex; flex-direction: column; gap: 8px; }
   .hout-item {
@@ -502,6 +507,14 @@
   .hout-view ul { margin: 4px 0; padding-left: 20px; }
   .hout-view li, .hout-view p { font-size: 13px; line-height: 1.75; color: #2b3540; }
   .hout-view a { color: #176a57; word-break: break-all; }
+  .hdetails {
+    margin-top: 10px; border: 1px solid #e6edf3; border-radius: 12px; background: #fbfcfe; padding: 0 11px;
+  }
+  .hdetails summary {
+    cursor: pointer; list-style: none; padding: 11px 0; font-size: 12px; font-weight: 800; color: #2c4157;
+  }
+  .hdetails summary::-webkit-details-marker { display: none; }
+  .hdetails .inner { padding: 0 0 12px; }
   .hgraph svg { display: block; width: 100%; height: auto; }
   .hrev {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
@@ -2987,10 +3000,41 @@ function hTypeLabel(type) {
 function hStatusLabel(status) {
   return {
     pending: '待機中',
-    running: '実行中',
-    done: '完了',
+    running: '生成中',
+    evaluating: '審査中',
+    revising: 'リライト中',
+    approved: '合格',
+    rejected: '見送り',
+    published: '公開済み',
     error: 'エラー',
+    done: '完了',
   }[status] || status;
+}
+function hStatusClass(status) {
+  return {
+    running: 'on',
+    approved: 'on',
+    evaluating: 'warn',
+    revising: 'warn',
+    published: 'pub',
+    rejected: 'err',
+    error: 'err',
+  }[status] || '';
+}
+function hScoreClass(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '';
+  if (n >= 75) return 'score-good';
+  if (n >= 50) return 'score-mid';
+  return 'score-low';
+}
+function hScoreBadge(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '';
+  return `<span class="hchip ${hScoreClass(n)}">${Math.round(n)}点</span>`;
+}
+function hOutputTitle(o) {
+  return o.articleTitle || o.topic || hTypeLabel(o.type);
 }
 function fmtMoney(n) {
   return Number(n || 0).toLocaleString('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 });
@@ -3009,7 +3053,7 @@ async function hFetchJson(url, opts) {
 }
 function computeHUnread() {
   let newest = 0;
-  for (const o of HOUTPUTS || []) newest = Math.max(newest, Date.parse(o.createdAt || 0) || 0);
+  for (const o of HOUTPUTS || []) newest = Math.max(newest, Date.parse(o.updatedAt || o.createdAt || 0) || 0);
   return newest > Number(localStorage.getItem('hSeenAt') || 0);
 }
 function updateHUnreadFromOutputs() {
@@ -3028,6 +3072,7 @@ async function loadHustlerData() {
   HJOBS = jobs.jobs || [];
   HOUTPUTS = outputs.outputs || [];
   HREVENUE = revenue || { items: [], monthly: [] };
+  hOutputCache = {};
   if (hCurrentOutputId && !HOUTPUTS.some((o) => o.id === hCurrentOutputId)) hCurrentOutputId = null;
   if (!hCurrentOutputId && HOUTPUTS.length) hCurrentOutputId = HOUTPUTS[0].id;
   updateHUnreadFromOutputs();
@@ -3076,29 +3121,48 @@ function renderHTabs() {
     $('h-tab-' + tab).classList.toggle('active', hTab === tab);
   }
 }
-function renderHJobsSection(status) {
-  const jobs = HJOBS.filter((j) => j.status === status);
+function renderHReviewDetails(o) {
+  const strengths = (o && o.strengths) || [];
+  const issues = (o && o.issues) || [];
+  const fixInstructions = o && o.fixInstructions;
+  if (!strengths.length && !issues.length && !fixInstructions) return '';
+  return `
+    <details class="hdetails">
+      <summary>講評を見る</summary>
+      <div class="inner">
+        ${strengths.length ? `<div class="hlabel">強み</div><ul>${strengths.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${issues.length ? `<div class="hlabel" style="margin-top:8px">課題</div><ul>${issues.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${fixInstructions ? `<div class="hlabel" style="margin-top:8px">改善指示</div><p>${esc(fixInstructions)}</p>` : ''}
+      </div>
+    </details>`;
+}
+function renderHJobsSection(title, statuses) {
+  const jobs = HJOBS.filter((j) => statuses.includes(j.status));
   if (!jobs.length) return '';
   return `
-    <div class="sec-title">${hStatusLabel(status)} (${jobs.length})</div>
+    <div class="sec-title">${esc(title)} (${jobs.length})</div>
     ${jobs.map((j) => `
       <div class="hjob">
         <div class="top">
           <div>
             <div class="ttl">${esc(hTypeLabel(j.type))} ${j.topic || j.prompt ? '— ' + esc((j.topic || j.prompt).slice(0, 90)) : ''}</div>
-            <div class="sub">作成 ${fmtAt(Date.parse(j.createdAt))}${j.finishedAt ? ' ・ 完了 ' + fmtAt(Date.parse(j.finishedAt)) : ''}${j.error ? ' ・ ' + esc(j.error) : ''}</div>
+            <div class="sub">作成 ${fmtAt(Date.parse(j.createdAt))}${j.startedAt ? ' ・ 開始 ' + fmtAt(Date.parse(j.startedAt)) : ''}${j.finishedAt ? ' ・ 完了 ' + fmtAt(Date.parse(j.finishedAt)) : ''}${Number.isFinite(Number(j.score)) ? ' ・ ' + Math.round(Number(j.score)) + '点' : ''}${j.revisionCount ? ' ・ リライト ' + j.revisionCount + '回' : ''}${j.publishError ? ' ・ 公開失敗: ' + esc(j.publishError) : ''}${j.error ? ' ・ ' + esc(j.error) : ''}</div>
           </div>
-          <span class="hchip ${status === 'running' ? 'on' : status === 'error' ? 'err' : ''}">${esc(hStatusLabel(status))}</span>
+          <div class="hrow" style="margin-top:0;justify-content:flex-end">
+            ${hScoreBadge(j.score)}
+            <span class="hchip ${hStatusClass(j.status)}">${esc(hStatusLabel(j.status))}</span>
+          </div>
         </div>
         <div class="acts">
-          ${status !== 'running' ? `<button class="hbtn" onclick="runHJob('${j.id}')">▶ 実行</button>` : ''}
+          ${!['running', 'evaluating', 'revising'].includes(j.status) ? `<button class="hbtn" onclick="runHJob('${j.id}')">▶ ${j.status === 'pending' ? '実行' : '再実行'}</button>` : ''}
           ${j.outputId ? `<button class="hbtn alt" onclick="openHOutputFromJob('${j.outputId}')">成果物</button>` : ''}
-          ${status !== 'running' ? `<button class="hbtn warn" onclick="deleteHJob('${j.id}')">削除</button>` : ''}
+          ${!['running', 'evaluating', 'revising'].includes(j.status) ? `<button class="hbtn warn" onclick="deleteHJob('${j.id}')">削除</button>` : ''}
         </div>
       </div>`).join('')}`;
 }
 function renderHWork() {
   if (!HSTATUS) return '<div class="empty">商人の状態を取得できません</div>';
+  const pub = HSTATUS.publish || { enabled: false, repoPath: '', articleType: 'tech', price: 0, topics: [], publishedFlag: true };
   const pct = Math.max(0, Math.min(100, Math.round(((HSTATUS.window5h && HSTATUS.window5h.totalTokens) || 0) / Math.max(1, HSTATUS.tokenBudget5h) * 100)));
   return `
     <div class="hcard">
@@ -3115,6 +3179,28 @@ function renderHWork() {
           <div><div class="hlabel">遊休判定(分)</div><input class="hinput" id="h-idle" type="number" min="1" max="180" value="${esc(HSTATUS.idleMinutes)}"></div>
           <div><div class="hlabel">5h予算(トークン)</div><input class="hinput" id="h-budget" type="number" min="10000" step="1000" value="${esc(HSTATUS.tokenBudget5h)}"></div>
           <div><div class="hlabel">1日の最大実行回数</div><input class="hinput" id="h-max-runs" type="number" min="1" max="48" value="${esc(HSTATUS.maxRunsPerDay)}"></div>
+          <div><div class="hlabel">品質しきい値</div><input class="hinput" id="h-quality" type="number" min="0" max="100" value="${esc(HSTATUS.qualityThreshold)}"></div>
+          <div><div class="hlabel">最大リライト回数</div><input class="hinput" id="h-revisions" type="number" min="0" max="5" value="${esc(HSTATUS.maxRevisions)}"></div>
+        </div>
+        <div class="htoggle" style="margin-top:10px">
+          <div>
+            <div class="hlabel">探検家→商人 連携</div>
+            <div class="hmeta">週次調査で新しいレポートが保存されたら、同テーマの記事ドラフトを自動で積みます。</div>
+          </div>
+          <input type="checkbox" id="h-auto-from-explorer" ${HSTATUS.autoFromExplorer ? 'checked' : ''}>
+        </div>
+        <div class="hlabel" style="margin-top:12px">公開設定</div>
+        <div class="htoggle">
+          <div>
+            <div class="hmeta">approved 記事を Zenn 連携リポジトリへ自動公開します。OFF の場合は成果物タブから手動公開できます。</div>
+          </div>
+          <input type="checkbox" id="h-publish-enabled" ${pub.enabled ? 'checked' : ''}>
+        </div>
+        <div class="hgrid" style="margin-top:10px">
+          <div style="grid-column:1 / -1"><div class="hlabel">Zenn リポジトリパス</div><input class="hinput" id="h-publish-repo" value="${esc(pub.repoPath || '')}" placeholder="/path/to/zenn-repo"></div>
+          <div><div class="hlabel">type</div><select class="hselect" id="h-publish-type"><option value="tech" ${pub.articleType === 'tech' ? 'selected' : ''}>tech</option><option value="idea" ${pub.articleType === 'idea' ? 'selected' : ''}>idea</option></select></div>
+          <div><div class="hlabel">price</div><input class="hinput" id="h-publish-price" type="number" min="0" step="1" value="${esc(pub.price || 0)}"></div>
+          <div style="grid-column:1 / -1"><div class="hlabel">topics(任意・カンマ区切り)</div><input class="hinput" id="h-publish-topics" value="${esc((pub.topics || []).join(', '))}" placeholder="ai-agents,claude,zenn"></div>
         </div>
         <div class="hrow"><button class="hbtn" type="submit">設定を保存</button></div>
       </form>
@@ -3154,10 +3240,8 @@ function renderHWork() {
       </form>
     </div>
 
-    ${renderHJobsSection('pending')}
-    ${renderHJobsSection('running')}
-    ${renderHJobsSection('done')}
-    ${renderHJobsSection('error')}
+    ${renderHJobsSection('進行中のジョブ', ['pending', 'running', 'evaluating', 'revising'])}
+    ${renderHJobsSection('完了したジョブ', ['approved', 'published', 'rejected', 'error'])}
     ${!HJOBS.length ? '<div class="empty">ジョブはまだありません</div>' : ''}`;
 }
 function renderHOutputs() {
@@ -3169,8 +3253,12 @@ function renderHOutputs() {
       <div class="hout-list">
         ${HOUTPUTS.map((o) => `
           <div class="hout-item ${selected && selected.id === o.id ? 'active' : ''}" onclick="selectHOutput('${o.id}')">
-            <div class="ttl">${esc(o.topic || hTypeLabel(o.type))}</div>
-            <div class="meta">${esc(hTypeLabel(o.type))} ・ ${esc(fmtAt(Date.parse(o.createdAt)))}</div>
+            <div class="ttl">${esc(hOutputTitle(o))}</div>
+            <div class="hrow" style="margin-top:6px">
+              ${hScoreBadge(o.score)}
+              <span class="hchip ${hStatusClass(o.state)}">${esc(hStatusLabel(o.state))}</span>
+            </div>
+            <div class="meta">${esc(hTypeLabel(o.type))} ・ ${esc(fmtAt(Date.parse(o.updatedAt || o.createdAt)))}</div>
           </div>`).join('')}
       </div>
       <div class="hout-view">
@@ -3178,11 +3266,24 @@ function renderHOutputs() {
           <div class="hrow" style="justify-content:space-between;margin-top:0">
             <div>
               <div class="hlabel">成果物</div>
-              <div class="hmeta"><b>${esc(selected.topic || hTypeLabel(selected.type))}</b><br>${esc(hTypeLabel(selected.type))} ・ ${esc(fmtAt(Date.parse(selected.createdAt)))}</div>
+              <div class="hmeta"><b>${esc(hOutputTitle(selected))}</b><br>${esc(hTypeLabel(selected.type))} ・ ${esc(fmtAt(Date.parse(selected.updatedAt || selected.createdAt)))}</div>
             </div>
-            <button class="hbtn alt" onclick="copyHOutput()" ${cached ? '' : 'disabled'}>コピー</button>
+            <div class="hrow" style="margin-top:0">
+              ${cached && cached.state === 'approved' ? `<button class="hbtn" onclick="publishHOutput('${selected.id}')">Zennへ公開</button>` : ''}
+              <button class="hbtn alt" onclick="copyHOutput()" ${cached ? '' : 'disabled'}>コピー</button>
+            </div>
           </div>
-          <div style="margin-top:12px">${cached ? mdToHtml(cached.body || '') : '<div class="xspin"><i></i>成果物を読み込み中…</div>'}</div>` : '<div class="empty">成果物を選択してください</div>'}
+          ${cached ? `
+            <div class="hrow">
+              ${hScoreBadge(cached.score)}
+              <span class="hchip ${hStatusClass(cached.state)}">${esc(hStatusLabel(cached.state))}</span>
+              ${cached.revisionCount ? `<span class="hchip">リライト ${esc(cached.revisionCount)}回</span>` : ''}
+              ${cached.slug ? `<span class="hchip">slug: ${esc(cached.slug)}</span>` : ''}
+            </div>
+            ${cached.publishError ? `<div class="hmini" style="color:#c0392b">公開エラー: ${esc(cached.publishError)}</div>` : ''}
+            ${renderHReviewDetails(cached)}
+            <div style="margin-top:12px">${mdToHtml(cached.body || '')}</div>`
+            : '<div class="xspin"><i></i>成果物を読み込み中…</div>'}` : '<div class="empty">成果物を選択してください</div>'}
       </div>
     </div>`;
 }
@@ -3275,6 +3376,16 @@ async function saveHConfig(ev) {
         idleMinutes: Number($('h-idle').value),
         tokenBudget5h: Number($('h-budget').value),
         maxRunsPerDay: Number($('h-max-runs').value),
+        qualityThreshold: Number($('h-quality').value),
+        maxRevisions: Number($('h-revisions').value),
+        autoFromExplorer: $('h-auto-from-explorer').checked,
+        publish: {
+          enabled: $('h-publish-enabled').checked,
+          repoPath: $('h-publish-repo').value.trim(),
+          articleType: $('h-publish-type').value,
+          price: Number($('h-publish-price').value),
+          topics: $('h-publish-topics').value.split(',').map((s) => s.trim()).filter(Boolean),
+        },
       }),
     });
     HSTATUS = j.status || HSTATUS;
@@ -3353,6 +3464,18 @@ function openHOutputFromJob(id) {
   hCurrentOutputId = id;
   renderHPanel();
   loadHOutput(id);
+}
+async function publishHOutput(id) {
+  try {
+    hBusy = true;
+    await hFetchJson('/api/hustler/publish/' + encodeURIComponent(id), { method: 'POST' });
+    await loadHustlerData();
+    hCurrentOutputId = id;
+    await loadHOutput(id);
+    renderHPanel();
+  } catch (e) {
+    alert('公開できませんでした: ' + e.message);
+  } finally { hBusy = false; renderHPanel(); }
 }
 async function copyHOutput() {
   const out = hOutputCache[hCurrentOutputId];
