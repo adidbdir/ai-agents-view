@@ -929,40 +929,140 @@ function hashString(s) {
 
 /* ══════════ アイソメトリック投影 ══════════ */
 const VIEW = { w: 1400, h: 860 };
-const PLATE = { cx: 700, cy: 465, w: 960, h: 480 };
-const ZONE_SPLIT_U = 0.42;
+const FLOOR_BASE = {
+  main: {
+    key: 'main',
+    cx: 500,
+    cy: 525,
+    minW: 760,
+    maxW: 930,
+    baseW: 780,
+    extraColW: 78,
+    extraRowW: 54,
+    thickness: 22,
+    palette: {
+      topFill: 'url(#plateTopMain)',
+      topStroke: '#ffffff',
+      sideLeft: '#c6d0dc',
+      sideRight: '#d4dde7',
+      grid: '#dde4ed',
+      labelFill: 'rgba(255,255,255,.86)',
+      labelStroke: 'rgba(123,144,164,.22)',
+    },
+  },
+  auto: {
+    key: 'auto',
+    cx: 995,
+    cy: 305,
+    minW: 500,
+    maxW: 660,
+    baseW: 520,
+    extraColW: 62,
+    extraRowW: 46,
+    thickness: 20,
+    palette: {
+      topFill: 'url(#plateTopAuto)',
+      topStroke: '#eef2ff',
+      sideLeft: '#b8c2e8',
+      sideRight: '#9cacdb',
+      grid: '#cfd8ef',
+      labelFill: 'rgba(234,240,255,.86)',
+      labelStroke: 'rgba(99,121,182,.28)',
+    },
+  },
+};
 const ZONE_META = {
   interactive: {
+    island: 'main',
     label: '💻 ワークスペース',
     shortLabel: '対話',
-    slots: [[.16, .20], [.22, .48], [.18, .76], [.31, .62]],
-    bounds: { u1: .14, u2: .35, v1: .16, v2: .88 },
-    labelPos: { u: .10, v: .60 },
+    slots: [[.34, .54], [.46, .72], [.54, .34], [.72, .46]],
+    bounds: { u1: .24, u2: .78, v1: .22, v2: .80 },
+    labelPos: { u: .11, v: .69, angle: -26.565 },
     labelColor: '#395166',
     countColor: '#6e8396',
   },
   auto: {
+    island: 'auto',
     label: '⚙️ 自動化エリア',
     shortLabel: '自動',
-    slots: [[.56, .18], [.62, .44], [.72, .68], [.54, .80]],
-    bounds: { u1: .52, u2: .76, v1: .16, v2: .86 },
-    labelPos: { u: .76, v: .20 },
+    slots: [[.22, .42], [.28, .68], [.38, .24], [.46, .54]],
+    bounds: { u1: .16, u2: .52, v1: .20, v2: .84 },
+    labelPos: { u: .10, v: .74, angle: -26.565 },
     labelColor: '#49618f',
     countColor: '#7386b4',
   },
 };
 const STATIONS = {
-  secretary: { u: .08, v: .10 },
-  explorer: { u: .82, v: .12 },
-  trader: { u: .79, v: .56 },
-  hustler: { u: .88, v: .82 },
+  secretary: { island: 'main', u: .14, v: .10 },
+  explorer: { island: 'auto', u: .76, v: .16 },
+  trader: { island: 'auto', u: .74, v: .52 },
+  hustler: { island: 'auto', u: .80, v: .82 },
 };
-// (u,v) ∈ [0,1]² → 画面座標 / (0,0)=手前, (1,1)=奥
-function iso(u, v) {
+let FLOOR_LAYOUT = null;
+
+function boardDefault(kind = 'main') {
+  const spec = FLOOR_BASE[kind];
+  return { ...spec, w: spec.baseW, h: spec.baseW / 2 };
+}
+function boardSize(kind, projectCount) {
+  const spec = FLOOR_BASE[kind];
+  const slots = kind === 'auto' ? Math.max(4, projectCount + 1) : Math.max(4, projectCount);
+  const cols = slots <= 4 ? 2 : Math.ceil(Math.sqrt(slots));
+  const rows = slots <= 4 ? 2 : Math.ceil(slots / cols);
+  const w = clamp(
+    spec.baseW + Math.max(0, cols - 2) * spec.extraColW + Math.max(0, rows - 2) * spec.extraRowW,
+    spec.minW,
+    spec.maxW,
+  );
+  return { w, h: w / 2, cols, rows };
+}
+function isoOn(board, u, v) {
   return {
-    x: PLATE.cx + (u - v) * PLATE.w / 2,
-    y: PLATE.cy + (1 - u - v) * PLATE.h / 2,
+    x: board.cx + (u - v) * board.w / 2,
+    y: board.cy + (1 - u - v) * board.h / 2,
   };
+}
+function iso(u, v, board = FLOOR_LAYOUT && FLOOR_LAYOUT.main) {
+  return isoOn(board || boardDefault('main'), u, v);
+}
+function boardCorners(board) {
+  return {
+    A: isoOn(board, 0, 0),
+    B: isoOn(board, 1, 0),
+    C: isoOn(board, 1, 1),
+    D: isoOn(board, 0, 1),
+  };
+}
+function boardEdgePoint(board, edge, t) {
+  if (edge === 'right') return isoOn(board, 1, t);
+  if (edge === 'left') return isoOn(board, 0, t);
+  if (edge === 'front') return isoOn(board, t, 0);
+  return isoOn(board, t, 1);
+}
+function createBridge(mainBoard, autoBoard) {
+  const mainEdge = boardEdgePoint(mainBoard, 'right', .34);
+  const autoEdge = boardEdgePoint(autoBoard, 'left', .68);
+  const mid = { x: (mainEdge.x + autoEdge.x) / 2 + 8, y: (mainEdge.y + autoEdge.y) / 2 - 8, island: 'bridge' };
+  return {
+    width: 18,
+    thickness: 11,
+    mainDock: { ...isoOn(mainBoard, .88, .31), island: 'main' },
+    mainEdge: { ...mainEdge, island: 'bridge' },
+    mid,
+    autoEdge: { ...autoEdge, island: 'bridge' },
+    autoDock: { ...isoOn(autoBoard, .10, .66), island: 'auto' },
+  };
+}
+function createFloorLayout(zoneCounts) {
+  const main = { ...FLOOR_BASE.main, ...boardSize('main', zoneCounts.interactive || 0) };
+  const auto = { ...FLOOR_BASE.auto, ...boardSize('auto', zoneCounts.auto || 0) };
+  return { main, auto, bridge: createBridge(main, auto) };
+}
+function stationPoint(name) {
+  const station = STATIONS[name];
+  const board = FLOOR_LAYOUT && FLOOR_LAYOUT[station.island] ? FLOOR_LAYOUT[station.island] : boardDefault(station.island);
+  return isoOn(board, station.u, station.v);
 }
 
 /* ══════════ ズーム / パン(カメラ)══════════
@@ -2006,8 +2106,17 @@ function traderStation(profitUp) {
 function buildDefs() {
   const defs = el('defs');
   defs.innerHTML = `
-    <linearGradient id="plateTop" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="plateTopMain" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#fdfeff"/><stop offset="1" stop-color="#e7edf4"/>
+    </linearGradient>
+    <linearGradient id="plateTopAuto" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#edf2ff"/><stop offset="1" stop-color="#cfdaf7"/>
+    </linearGradient>
+    <linearGradient id="bridgeTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4e4cf"/><stop offset="1" stop-color="#dfc19b"/>
+    </linearGradient>
+    <linearGradient id="bridgeSide" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c9a983"/><stop offset="1" stop-color="#b18a63"/>
     </linearGradient>
     <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
       <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#2d3e50" flood-opacity="0.22"/>
@@ -2019,79 +2128,118 @@ function buildDefs() {
   return defs;
 }
 
-function plateZonePolygon(zone) {
-  const A = iso(0, 0);
-  const B = iso(1, 0);
-  const C = iso(1, 1);
-  const D = iso(0, 1);
-  const P = iso(ZONE_SPLIT_U, 0);
-  const Q = iso(ZONE_SPLIT_U, 1);
-  return zone === 'auto' ? [P, B, C, Q] : [A, P, Q, D];
-}
 function pointsPath(points) {
   return 'M' + points.map((p) => `${p.x},${p.y}`).join(' L') + ' Z';
 }
-function buildZoneLabel(zone, count) {
+function buildZoneLabel(board, zone, count) {
   const meta = ZONE_META[zone];
-  const pt = iso(meta.labelPos.u, meta.labelPos.v);
-  const g = el('g', { transform: `translate(${pt.x},${pt.y})` });
+  const pt = isoOn(board, meta.labelPos.u, meta.labelPos.v);
+  const angle = meta.labelPos.angle || 0;
+  const g = el('g', { transform: `translate(${pt.x},${pt.y}) rotate(${angle})` });
   g.appendChild(el('rect', {
-    x: -76, y: -26, width: 152, height: 36, rx: 12,
-    fill: zone === 'auto' ? 'rgba(235,241,255,.82)' : 'rgba(255,255,255,.82)',
-    stroke: zone === 'auto' ? 'rgba(110,136,196,.35)' : 'rgba(123,144,164,.22)',
+    x: -84, y: -24, width: 168, height: 34, rx: 12,
+    fill: board.palette.labelFill,
+    stroke: board.palette.labelStroke,
     'stroke-width': 1.2,
   }));
-  const label = el('text', { x: -62, y: -4, fill: meta.labelColor, 'font-size': 14, 'font-weight': 800 });
+  const label = el('text', { x: -70, y: -4, fill: meta.labelColor, 'font-size': 13.5, 'font-weight': 800 });
   txt(label, meta.label);
   g.appendChild(label);
-  const countText = el('text', { x: -62, y: 11, fill: meta.countColor, 'font-size': 10.5, 'font-weight': 700 });
+  const countText = el('text', { x: -70, y: 10, fill: meta.countColor, 'font-size': 10.5, 'font-weight': 700 });
   txt(countText, `${meta.shortLabel} ${count}件`);
   g.appendChild(countText);
   return g;
 }
 
-function buildPlate(zoneCounts) {
+function buildPlate(board, zone, count) {
   const g = el('g');
-  const A = iso(0, 0), B = iso(1, 0), C = iso(1, 1), D = iso(0, 1);
-  const TH = 18;
-  const P = iso(ZONE_SPLIT_U, 0), Q = iso(ZONE_SPLIT_U, 1);
+  const { A, B, C, D } = boardCorners(board);
+  const TH = board.thickness;
 
   // 側面(厚み)
   g.appendChild(el('path', {
-    d: `M${D.x},${D.y} L${A.x},${A.y} L${A.x},${A.y + TH} L${D.x},${D.y + TH} Z`, fill: '#c6d0dc',
+    d: `M${D.x},${D.y} L${A.x},${A.y} L${A.x},${A.y + TH} L${D.x},${D.y + TH} Z`,
+    fill: board.palette.sideLeft,
   }));
   g.appendChild(el('path', {
-    d: `M${A.x},${A.y} L${B.x},${B.y} L${B.x},${B.y + TH} L${A.x},${A.y + TH} Z`, fill: '#d4dde7',
+    d: `M${A.x},${A.y} L${B.x},${B.y} L${B.x},${B.y + TH} L${A.x},${A.y + TH} Z`,
+    fill: board.palette.sideRight,
   }));
   // 天面
   g.appendChild(el('path', {
     d: `M${A.x},${A.y} L${B.x},${B.y} L${C.x},${C.y} L${D.x},${D.y} Z`,
-    fill: 'url(#plateTop)', stroke: '#ffffff', 'stroke-width': 3, filter: 'url(#soft)',
-  }));
-  g.appendChild(el('path', {
-    d: pointsPath(plateZonePolygon('auto')),
-    fill: 'rgba(218, 228, 255, .55)',
+    fill: board.palette.topFill,
+    stroke: board.palette.topStroke,
+    'stroke-width': 3,
+    filter: 'url(#soft)',
   }));
   // 床タイルグリッド
+  const gridCount = board.key === 'main' ? 9 : 8;
+  for (let i = 1; i < gridCount; i++) {
+    const t = i / gridCount;
+    const p1 = isoOn(board, t, 0), p2 = isoOn(board, t, 1), p3 = isoOn(board, 0, t), p4 = isoOn(board, 1, t);
+    g.appendChild(el('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, stroke: board.palette.grid, 'stroke-width': 1.2 }));
+    g.appendChild(el('line', { x1: p3.x, y1: p3.y, x2: p4.x, y2: p4.y, stroke: board.palette.grid, 'stroke-width': 1.2 }));
+  }
+  g.appendChild(buildZoneLabel(board, zone, count));
+  return g;
+}
+
+function buildBridge(layout) {
+  const g = el('g');
+  const { mainEdge, autoEdge, width, thickness } = layout.bridge;
+  const dx = autoEdge.x - mainEdge.x;
+  const dy = autoEdge.y - mainEdge.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = -dy / len * width / 2;
+  const py = dx / len * width / 2;
+  const top = [
+    { x: mainEdge.x + px, y: mainEdge.y + py },
+    { x: autoEdge.x + px, y: autoEdge.y + py },
+    { x: autoEdge.x - px, y: autoEdge.y - py },
+    { x: mainEdge.x - px, y: mainEdge.y - py },
+  ];
+  const side = [
+    top[0],
+    top[1],
+    { x: top[1].x, y: top[1].y + thickness },
+    { x: top[0].x, y: top[0].y + thickness },
+  ];
+  const cap = [
+    top[0],
+    top[3],
+    { x: top[3].x, y: top[3].y + thickness },
+    { x: top[0].x, y: top[0].y + thickness },
+  ];
+
+  g.appendChild(el('path', { d: pointsPath(side), fill: 'url(#bridgeSide)', filter: 'url(#soft)' }));
+  g.appendChild(el('path', { d: pointsPath(cap), fill: '#c29a72' }));
+  g.appendChild(el('path', {
+    d: pointsPath(top),
+    fill: 'url(#bridgeTop)',
+    stroke: '#f6efe3',
+    'stroke-width': 2,
+  }));
   for (let i = 1; i < 8; i++) {
     const t = i / 8;
-    const p1 = iso(t, 0), p2 = iso(t, 1), p3 = iso(0, t), p4 = iso(1, t);
-    g.appendChild(el('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, stroke: t >= ZONE_SPLIT_U ? '#d2daf0' : '#dde4ed', 'stroke-width': 1.2 }));
-    g.appendChild(el('line', { x1: p3.x, y1: p3.y, x2: p4.x, y2: p4.y, stroke: '#dde4ed', 'stroke-width': 1.2 }));
+    const x1 = top[0].x + (top[3].x - top[0].x) * t;
+    const y1 = top[0].y + (top[3].y - top[0].y) * t;
+    const x2 = top[1].x + (top[2].x - top[1].x) * t;
+    const y2 = top[1].y + (top[2].y - top[1].y) * t;
+    g.appendChild(el('line', {
+      x1, y1, x2, y2,
+      stroke: '#bc946d',
+      'stroke-width': 1.4,
+      opacity: .95,
+    }));
   }
-  g.appendChild(el('line', {
-    x1: P.x, y1: P.y, x2: Q.x, y2: Q.y,
-    stroke: '#9fb4da', 'stroke-width': 1.6, opacity: .85,
-  }));
-  g.appendChild(buildZoneLabel('interactive', zoneCounts.interactive || 0));
-  g.appendChild(buildZoneLabel('auto', zoneCounts.auto || 0));
   return g;
 }
 
 /* ══════════ レイアウト ══════════ */
 // デスクの配置。
 // 4台まで: 風車型(中央にミーティングテーブル) / 5台以上: グリッド配置(デスクを自動縮小)
-function layoutZoneProjects(projects, zone) {
+function layoutZoneProjects(projects, zone, board) {
   const meta = ZONE_META[zone];
   const n = projects.length;
   if (n <= 4) {
@@ -2107,7 +2255,7 @@ function layoutZoneProjects(projects, zone) {
   const su = (u2 - u1) / cols;
   const sv = (v2 - v1) / rows;
   // 隣接デスクの画面距離からスケールを決める(デスク一式の幅 ≈ 170px)
-  const gap = Math.min(su, sv) * (PLATE.w / 2) * 1.118;
+  const gap = Math.min(su, sv) * (board.w / 2) * 1.118;
   const scale = Math.max(.42, Math.min(1, gap / 175));
   const placed = projects.map((p, i) => {
     const col = i % cols, row = Math.floor(i / cols);
@@ -2125,29 +2273,46 @@ const AMBIENT = {
   layer: null,
   cats: [],
   obstacles: [],
-  points: [],
-  cozy: true,
+  points: { main: [], auto: [] },
+  bridge: null,
+  bed: null,
   lastTime: 0,
   rafId: 0,
-  bed: { u: .41, v: .51 },
 };
 
-function uvBlocked(u, v, pad = .02) {
-  if (u < .04 || u > .96 || v < .04 || v > .96) return true;
-  return AMBIENT.obstacles.some((o) =>
-    u > o.u1 - pad && u < o.u2 + pad && v > o.v1 - pad && v < o.v2 + pad);
+function worldObstacle(x, y, dx, dy) {
+  return { x1: x - dx, x2: x + dx, y1: y - dy, y2: y + dy };
 }
-function segmentClear(u1, v1, u2, v2) {
-  for (let i = 1; i <= 8; i++) {
-    const t = i / 8;
-    if (uvBlocked(u1 + (u2 - u1) * t, v1 + (v2 - v1) * t, .016)) return false;
+function ambientBlocked(x, y, pad = 0) {
+  return AMBIENT.obstacles.some((o) =>
+    x > o.x1 - pad && x < o.x2 + pad && y > o.y1 - pad && y < o.y2 + pad);
+}
+function segmentClearWorld(a, b, pad = 12) {
+  for (let i = 1; i <= 12; i++) {
+    const t = i / 12;
+    if (ambientBlocked(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, pad)) return false;
   }
   return true;
 }
+function ambientPoint(boardKey, u, v, extra = {}) {
+  const pt = isoOn(FLOOR_LAYOUT[boardKey], u, v);
+  return { x: pt.x, y: pt.y, island: boardKey, u, v, ...extra };
+}
+function ambientBoardPoints(boardKey, cozy) {
+  const defs = boardKey === 'main'
+    ? (cozy
+        ? [[.18, .28], [.30, .18], [.24, .70], [.40, .82], [.58, .76], [.74, .58], [.78, .30], [.58, .22], [.52, .66], [.84, .34]]
+        : [[.18, .18], [.34, .18], [.52, .18], [.72, .20], [.84, .34], [.82, .60], [.66, .80], [.44, .84], [.22, .78], [.18, .52], [.22, .30]])
+    : (cozy
+        ? [[.16, .22], [.28, .20], [.42, .22], [.18, .52], [.30, .72], [.18, .84], [.48, .72], [.50, .40], [.10, .66]]
+        : [[.14, .20], [.26, .18], [.42, .20], [.54, .26], [.56, .48], [.48, .74], [.28, .84], [.12, .74], [.10, .56], [.10, .34], [.16, .22]]);
+  return defs
+    .map(([u, v]) => ambientPoint(boardKey, u, v))
+    .filter((pt) => !ambientBlocked(pt.x, pt.y, 20));
+}
 function ambientTransform(state) {
-  const pt = iso(state.u, state.v);
   const sx = state.flip ? -state.scale : state.scale;
-  state.wrap.setAttribute('transform', `translate(${pt.x},${pt.y}) scale(${sx},${state.scale})`);
+  state.wrap.setAttribute('transform', `translate(${state.x},${state.y}) scale(${sx},${state.scale})`);
 }
 function setAmbientPose(state, pose, extra = {}) {
   state.pose = pose;
@@ -2160,33 +2325,51 @@ function setAmbientPose(state, pose, extra = {}) {
   }));
   ambientTransform(state);
 }
+function ambientSpawnPoint(preferredIsland = 'main', index = 0) {
+  const same = AMBIENT.points[preferredIsland] || [];
+  if (same.length) return same[index % same.length];
+  const otherKey = preferredIsland === 'main' ? 'auto' : 'main';
+  const other = AMBIENT.points[otherKey] || [];
+  if (other.length) return other[index % other.length];
+  return { x: VIEW.w * .38, y: VIEW.h * .62, island: 'main' };
+}
+function ambientFallbackPoint(preferredIsland = 'main') {
+  return ambientSpawnPoint(preferredIsland, 0);
+}
+function ambientCurrentIsland(state) {
+  if (state.surface === 'bridge' && AMBIENT.bridge) {
+    return state.x < AMBIENT.bridge.mid.x ? 'main' : 'auto';
+  }
+  return state.surface || 'main';
+}
 function ensureAmbientLayer() {
   if (!AMBIENT.layer) {
     AMBIENT.layer = el('g', { class: 'ambient-layer' });
   }
   if (!AMBIENT.cats.length) {
     const seeds = [
-      { u: .27, v: .52, coat: 'orangeTabby' },
-      { u: .57, v: .26, coat: 'grayTabby' },
-      { u: .74, v: .58, coat: 'tuxedo' },
+      { island: 'main', index: 0, coat: 'orangeTabby' },
+      { island: 'main', index: 5, coat: 'grayTabby' },
+      { island: 'auto', index: 1, coat: 'tuxedo' },
     ];
     AMBIENT.cats = seeds.map((cfg, i) => {
+      const spawn = ambientSpawnPoint(cfg.island, cfg.index);
       const wrap = el('g');
       const state = {
         id: i,
         seed: `ambient:${i}`,
         coat: cfg.coat,
         wrap,
-        u: cfg.u,
-        v: cfg.v,
-        targetU: cfg.u,
-        targetV: cfg.v,
+        x: spawn.x,
+        y: spawn.y,
+        surface: spawn.island,
+        path: [],
         targetBed: false,
         mode: 'walk',
         pose: 'walk',
         groom: false,
         waitMs: 0,
-        speed: .05 + i * .007,
+        speed: 58 + i * 8,
         scale: .72 + i * .05,
         flip: i % 2 === 1,
       };
@@ -2208,31 +2391,49 @@ function ensureAmbientLayer() {
   }
   return AMBIENT.layer;
 }
-function chooseAmbientTarget(state, immediate = false) {
-  const candidates = [];
-  if (Math.random() < .22) candidates.push({ ...AMBIENT.bed, bed: true });
-  const shuffled = [...AMBIENT.points].sort(() => Math.random() - .5);
-  candidates.push(...shuffled);
-  for (let i = 0; i < 24; i++) {
-    candidates.push({
-      u: .08 + Math.random() * .84,
-      v: .08 + Math.random() * .84,
-      bed: false,
-    });
+function buildAmbientPath(state, target) {
+  const fromIsland = ambientCurrentIsland(state);
+  if (fromIsland === target.island) {
+    return segmentClearWorld({ x: state.x, y: state.y }, target, 12) ? [target] : null;
   }
+  if (!AMBIENT.bridge) return null;
+  const bridge = AMBIENT.bridge;
+  const startDock = fromIsland === 'auto' ? bridge.autoDock : bridge.mainDock;
+  const edgeOut = fromIsland === 'auto' ? bridge.autoEdge : bridge.mainEdge;
+  const edgeIn = target.island === 'auto' ? bridge.autoEdge : bridge.mainEdge;
+  const endDock = target.island === 'auto' ? bridge.autoDock : bridge.mainDock;
+  const steps = [startDock, edgeOut, bridge.mid, edgeIn, endDock, target];
+  let prev = { x: state.x, y: state.y };
+  for (const step of steps) {
+    const pad = step.island === 'bridge' ? 6 : 12;
+    if (!segmentClearWorld(prev, step, pad)) return null;
+    prev = step;
+  }
+  return steps;
+}
+function chooseAmbientTarget(state, immediate = false) {
+  const fromIsland = ambientCurrentIsland(state);
+  const otherIsland = fromIsland === 'main' ? 'auto' : 'main';
+  const same = [...(AMBIENT.points[fromIsland] || [])].sort(() => Math.random() - .5);
+  const other = [...(AMBIENT.points[otherIsland] || [])].sort(() => Math.random() - .5);
+  const candidates = [];
+  if (AMBIENT.bed && fromIsland === 'main' && Math.random() < .24) candidates.push({ ...AMBIENT.bed, bed: true });
+  candidates.push(...same);
+  if (Math.random() < .38) candidates.push(...other);
+  candidates.push(...other);
   for (const c of candidates) {
-    if (uvBlocked(c.u, c.v, .018)) continue;
-    if (!segmentClear(state.u, state.v, c.u, c.v) && !c.bed) continue;
-    state.targetU = c.u;
-    state.targetV = c.v;
+    if (Math.hypot(c.x - state.x, c.y - state.y) < 24) continue;
+    const path = buildAmbientPath(state, c);
+    if (!path) continue;
+    state.path = path.map((pt) => ({ ...pt }));
     state.targetBed = !!c.bed;
     state.mode = 'walk';
     setAmbientPose(state, 'walk');
     return;
   }
   if (immediate) {
-    state.targetU = clamp(state.u + (Math.random() - .5) * .1, .08, .92);
-    state.targetV = clamp(state.v + (Math.random() - .5) * .1, .08, .92);
+    const fallback = ambientFallbackPoint(fromIsland);
+    state.path = fallback ? [{ ...fallback }] : [];
     state.targetBed = false;
     state.mode = 'walk';
     setAmbientPose(state, 'walk');
@@ -2257,32 +2458,32 @@ function settleAmbientCat(state) {
 function tickAmbient(dt) {
   for (const state of AMBIENT.cats) {
     if (state.mode === 'walk') {
-      const du = state.targetU - state.u;
-      const dv = state.targetV - state.v;
+      if (!state.path.length) {
+        chooseAmbientTarget(state, true);
+        continue;
+      }
+      const target = state.path[0];
+      const du = target.x - state.x;
+      const dv = target.y - state.y;
       const dist = Math.hypot(du, dv);
-      if (dist < .008) {
-        settleAmbientCat(state);
+      if (dist < 3) {
+        state.x = target.x;
+        state.y = target.y;
+        state.surface = target.island === 'bridge' ? 'bridge' : target.island;
+        state.path.shift();
+        ambientTransform(state);
+        if (!state.path.length) settleAmbientCat(state);
         continue;
       }
       const step = Math.min(dist, state.speed * dt / 1000);
-      let nu = state.u + du / dist * step;
-      let nv = state.v + dv / dist * step;
-      if (uvBlocked(nu, nv, .014)) {
-        const su1 = state.u - dv / dist * step * 1.2;
-        const sv1 = state.v + du / dist * step * 1.2;
-        const su2 = state.u + dv / dist * step * 1.2;
-        const sv2 = state.v - du / dist * step * 1.2;
-        if (!uvBlocked(su1, sv1, .014)) {
-          nu = su1; nv = sv1;
-        } else if (!uvBlocked(su2, sv2, .014)) {
-          nu = su2; nv = sv2;
-        } else {
-          chooseAmbientTarget(state, true);
-          continue;
-        }
+      const nx = state.x + du / dist * step;
+      const ny = state.y + dv / dist * step;
+      if (ambientBlocked(nx, ny, target.island === 'bridge' ? 6 : 14)) {
+        chooseAmbientTarget(state, true);
+        continue;
       }
-      state.u = nu;
-      state.v = nv;
+      state.x = nx;
+      state.y = ny;
       state.flip = du < 0;
       ambientTransform(state);
     } else {
@@ -2290,50 +2491,46 @@ function tickAmbient(dt) {
       if (state.waitMs <= 0) chooseAmbientTarget(state, true);
     }
   }
-  const ordered = [...AMBIENT.cats].sort((a, b) => a.v - b.v);
+  const ordered = [...AMBIENT.cats].sort((a, b) => a.y - b.y);
   for (const state of ordered) AMBIENT.layer.appendChild(state.wrap);
 }
-function ambientObstacle(u, v, du, dv) {
-  return { u1: u - du, u2: u + du, v1: v - dv, v2: v + dv };
-}
-function updateAmbientScene(cozy, placed) {
+function updateAmbientScene(scene) {
+  const mainHub = isoOn(FLOOR_LAYOUT.main, .52, .52);
   const obstacles = [
-    ambientObstacle(STATIONS.secretary.u, STATIONS.secretary.v, .11, .1),
-    ambientObstacle(STATIONS.explorer.u, STATIONS.explorer.v, .11, .1),
-    ambientObstacle(STATIONS.trader.u, STATIONS.trader.v, .11, .1),
-    ambientObstacle(STATIONS.hustler.u, STATIONS.hustler.v, .11, .1),
-    ambientObstacle(.13, .34, .09, .08),
-    ambientObstacle(.46, .94, .09, .08),
-    ambientObstacle(.88, .72, .08, .08),
-    ambientObstacle(.78, .86, .08, .08),
+    worldObstacle(stationPoint('secretary').x, stationPoint('secretary').y, 78, 62),
+    worldObstacle(stationPoint('explorer').x, stationPoint('explorer').y, 74, 60),
+    worldObstacle(stationPoint('trader').x, stationPoint('trader').y, 74, 60),
+    worldObstacle(stationPoint('hustler').x, stationPoint('hustler').y, 74, 60),
   ];
-  if (cozy) {
-    obstacles.push(ambientObstacle(.5, .5, .09, .09));
+  if (scene.mainCozy) {
+    obstacles.push(worldObstacle(mainHub.x, mainHub.y, 92, 66));
   }
-  for (const { u, v, scale } of placed) {
-    const pad = cozy ? .12 : clamp(.055 * scale + .02, .045, .08);
-    obstacles.push(ambientObstacle(u, v, pad, pad));
+  for (const { u, v, scale } of scene.interactivePlaced) {
+    const pt = isoOn(FLOOR_LAYOUT.main, u, v);
+    const pad = scene.mainCozy ? 84 : clamp(58 * scale + 18, 46, 78);
+    obstacles.push(worldObstacle(pt.x, pt.y, pad, pad * .72));
+  }
+  for (const { u, v, scale } of scene.autoPlaced) {
+    const pt = isoOn(FLOOR_LAYOUT.auto, u, v);
+    const pad = scene.autoCozy ? 74 : clamp(52 * scale + 18, 42, 68);
+    obstacles.push(worldObstacle(pt.x, pt.y, pad, pad * .68));
   }
   AMBIENT.obstacles = obstacles;
-  AMBIENT.cozy = cozy;
-  AMBIENT.points = cozy
-    ? [
-        { u: .22, v: .44 }, { u: .38, v: .30 }, { u: .61, v: .30 },
-        { u: .76, v: .44 }, { u: .31, v: .73 }, { u: .67, v: .70 },
-        { u: .49, v: .60 }, { u: .53, v: .42 },
-      ]
-    : [
-        { u: .19, v: .20 }, { u: .33, v: .24 }, { u: .49, v: .22 }, { u: .66, v: .22 }, { u: .80, v: .23 },
-        { u: .20, v: .46 }, { u: .38, v: .48 }, { u: .57, v: .49 }, { u: .76, v: .49 },
-        { u: .22, v: .74 }, { u: .41, v: .76 }, { u: .61, v: .77 }, { u: .79, v: .76 },
-      ].filter((pt) => !uvBlocked(pt.u, pt.v, .015));
+  AMBIENT.bridge = FLOOR_LAYOUT.bridge;
+  AMBIENT.bed = scene.mainCozy ? ambientPoint('main', .42, .58, { bed: true }) : null;
+  AMBIENT.points.main = ambientBoardPoints('main', scene.mainCozy);
+  AMBIENT.points.auto = ambientBoardPoints('auto', scene.autoCozy);
   ensureAmbientLayer();
   for (const state of AMBIENT.cats) {
-    if (uvBlocked(state.u, state.v, .02)) {
-      state.u = clamp(state.u, .09, .91);
-      state.v = clamp(state.v, .09, .91);
+    if (ambientBlocked(state.x, state.y, 16)) {
+      const spawn = ambientFallbackPoint(ambientCurrentIsland(state));
+      state.x = spawn.x;
+      state.y = spawn.y;
+      state.surface = spawn.island;
+      state.path = [];
+      state.mode = 'walk';
     }
-    if (state.mode === 'walk' && (uvBlocked(state.targetU, state.targetV, .02) || Math.hypot(state.targetU - state.u, state.targetV - state.v) < .002)) {
+    if (state.mode === 'walk' && !state.path.length) {
       chooseAmbientTarget(state, true);
     }
     ambientTransform(state);
@@ -2344,8 +2541,7 @@ function updateAmbientScene(cozy, placed) {
 function render() {
   if (!DATA) return;
   const svg = $('stage');
-  const ambientLayer = ensureAmbientLayer();
-  if (ambientLayer.parentNode === svg) svg.removeChild(ambientLayer);
+  if (AMBIENT.layer && AMBIENT.layer.parentNode === svg) svg.removeChild(AMBIENT.layer);
   applyView();
   svg.innerHTML = '';
   svg.appendChild(buildDefs());
@@ -2366,19 +2562,23 @@ function render() {
     interactive: zoneProjects.interactive.length,
     auto: zoneProjects.auto.length,
   };
-  svg.appendChild(buildPlate(zoneCounts));
-  const interactiveLayout = layoutZoneProjects(zoneProjects.interactive, 'interactive');
-  const autoLayout = layoutZoneProjects(zoneProjects.auto, 'auto');
-  const placed = [...interactiveLayout.placed, ...autoLayout.placed];
-  const cozy = projects.length <= 4;
-  const hub = iso(.5, .5);
+  FLOOR_LAYOUT = createFloorLayout(zoneCounts);
+  svg.appendChild(buildPlate(FLOOR_LAYOUT.main, 'interactive', zoneCounts.interactive));
+  svg.appendChild(buildPlate(FLOOR_LAYOUT.auto, 'auto', zoneCounts.auto));
+  svg.appendChild(buildBridge(FLOOR_LAYOUT));
 
-  // 接続線(コンパクト表示のときのみ / 家具より下のレイヤー)
-  if (cozy) {
+  const interactiveLayout = layoutZoneProjects(zoneProjects.interactive, 'interactive', FLOOR_LAYOUT.main);
+  const autoLayout = layoutZoneProjects(zoneProjects.auto, 'auto', FLOOR_LAYOUT.auto);
+  const mainCozy = interactiveLayout.cozy;
+  const autoCozy = autoLayout.cozy;
+  const hub = isoOn(FLOOR_LAYOUT.main, .52, .52);
+
+  // 接続線(メイン板のコンパクト表示時のみ / 家具より下のレイヤー)
+  if (mainCozy) {
     const linkLayer = el('g');
     svg.appendChild(linkLayer);
-    for (const { p, u, v } of placed) {
-      const pt = iso(u, v);
+    for (const { p, u, v } of interactiveLayout.placed) {
+      const pt = isoOn(FLOOR_LAYOUT.main, u, v);
       const mx = (pt.x + hub.x) / 2, my = (pt.y + hub.y) / 2 - 20;
       linkLayer.appendChild(el('path', {
         d: 'M' + pt.x + ',' + pt.y + ' Q' + mx + ',' + my + ' ' + hub.x + ',' + hub.y,
@@ -2386,43 +2586,77 @@ function render() {
       }));
     }
   }
+  {
+    const autoHub = isoOn(FLOOR_LAYOUT.auto, .60, .48);
+    const autoLinkLayer = el('g', { opacity: .4 });
+    for (const name of ['explorer', 'trader', 'hustler']) {
+      const pt = stationPoint(name);
+      const mx = (pt.x + autoHub.x) / 2;
+      const my = (pt.y + autoHub.y) / 2 - 12;
+      autoLinkLayer.appendChild(el('path', {
+        d: 'M' + pt.x + ',' + pt.y + ' Q' + mx + ',' + my + ' ' + autoHub.x + ',' + autoHub.y,
+        class: 'link idle',
+      }));
+    }
+    svg.appendChild(autoLinkLayer);
+  }
 
   // シーンアイテムを奥→手前の順に描画(ペインターアルゴリズム)
   const items = [];
 
-  // グリッド表示のときは装飾を四隅の植物だけに間引く
-  const deco = cozy ? [
-    { u: .46, v: .94, build: whiteboard },
-    { u: .88, v: .72, build: serverRack },
-    { u: .13, v: .34, build: coffeeCorner },
-    { u: .07, v: .93, build: plant },
-    { u: .93, v: .93, build: plant },
-    { u: .07, v: .07, build: plant },
-    { u: .93, v: .07, build: plant },
+  const mainDeco = mainCozy ? [
+    { u: .22, v: .92, build: whiteboard },
+    { u: .10, v: .32, build: coffeeCorner },
+    { u: .05, v: .96, build: plant },
+    { u: .95, v: .95, build: plant },
+    { u: .05, v: .06, build: plant },
+    { u: .95, v: .08, build: plant },
+    { u: .80, v: .84, build: catTower },
   ] : [
     { u: .04, v: .96, build: plant },
     { u: .96, v: .96, build: plant },
     { u: .04, v: .04, build: plant },
     { u: .96, v: .04, build: plant },
+    { u: .80, v: .84, build: catTower },
   ];
-  const decoWithCats = cozy
-    ? [...deco, { u: .78, v: .86, build: catTower }]
-    : [deco[0], { u: .78, v: .86, build: catTower }, ...deco.slice(1)];
-  for (const d of decoWithCats) {
-    const pt = iso(d.u, d.v);
+  const autoDeco = autoCozy ? [
+    { u: .18, v: .88, build: serverRack },
+    { u: .12, v: .12, build: plant },
+    { u: .24, v: .94, build: plant },
+  ] : [
+    { u: .18, v: .88, build: serverRack },
+    { u: .12, v: .12, build: plant },
+    { u: .24, v: .94, build: plant },
+  ];
+  for (const d of mainDeco) {
+    const pt = isoOn(FLOOR_LAYOUT.main, d.u, d.v);
+    const g = d.build();
+    g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
+    items.push({ y: pt.y, el: g });
+  }
+  for (const d of autoDeco) {
+    const pt = isoOn(FLOOR_LAYOUT.auto, d.u, d.v);
     const g = d.build();
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     items.push({ y: pt.y, el: g });
   }
 
-  if (cozy) { // 中央ミーティングテーブル
+  if (mainCozy) { // 中央ミーティングテーブル
     const g = meetingTable();
     g.setAttribute('transform', 'translate(' + hub.x + ',' + hub.y + ')');
     items.push({ y: hub.y, el: g });
   }
 
-  for (const { p, u, v, scale } of placed) {
-    const pt = iso(u, v);
+  for (const { p, u, v, scale } of interactiveLayout.placed) {
+    const pt = isoOn(FLOOR_LAYOUT.main, u, v);
+    const g = workstation(p);
+    g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ') scale(' + scale + ')');
+    // click だと再描画とマウス操作が競合して不発になることがあるため pointerdown
+    g.addEventListener('pointerdown', () => openPanel(p.id || p.dirName));
+    items.push({ y: pt.y, el: g });
+  }
+  for (const { p, u, v, scale } of autoLayout.placed) {
+    const pt = isoOn(FLOOR_LAYOUT.auto, u, v);
     const g = workstation(p);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ') scale(' + scale + ')');
     // click だと再描画とマウス操作が競合して不発になることがあるため pointerdown
@@ -2432,7 +2666,7 @@ function render() {
 
   // 秘書(常に最前面・クリックでチャット)
   {
-    const pt = iso(STATIONS.secretary.u, STATIONS.secretary.v);
+    const pt = stationPoint('secretary');
     const g = secretaryStation();
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openSPanel);
@@ -2441,7 +2675,7 @@ function render() {
 
   // 探検家(常に最前面・クリックでトピック調査)
   {
-    const pt = iso(STATIONS.explorer.u, STATIONS.explorer.v);
+    const pt = stationPoint('explorer');
     const g = explorerStation(xUnread);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openXPanel);
@@ -2450,7 +2684,7 @@ function render() {
 
   // 商人(常に最前面・クリックで内職パネル)
   {
-    const pt = iso(STATIONS.hustler.u, STATIONS.hustler.v);
+    const pt = stationPoint('hustler');
     const g = hustlerStation(hUnread);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openHPanel);
@@ -2459,7 +2693,7 @@ function render() {
 
   // トレーダー(常に最前面・クリックでペーパートレード)
   {
-    const pt = iso(STATIONS.trader.u, STATIONS.trader.v);
+    const pt = stationPoint('trader');
     const g = traderStation(TSTATUS && Number(TSTATUS.pnl) > 0);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openTPanel);
@@ -2468,8 +2702,13 @@ function render() {
 
   items.sort((a, b) => a.y - b.y);
   for (const it of items) svg.appendChild(it.el);
-  updateAmbientScene(cozy, placed);
-  svg.appendChild(ambientLayer);
+  updateAmbientScene({
+    mainCozy,
+    autoCozy,
+    interactivePlaced: interactiveLayout.placed,
+    autoPlaced: autoLayout.placed,
+  });
+  if (AMBIENT.layer) svg.appendChild(AMBIENT.layer);
 
   renderStats(projects);
   $('updated').textContent = updatedLine();
