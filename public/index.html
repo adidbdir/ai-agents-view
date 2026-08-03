@@ -220,6 +220,21 @@
   }
   .badge.on { background: var(--cyan); color: #06303c; }
   .panel-body { flex: 1; overflow-y: auto; padding: 16px 18px 24px; }
+  .panel-zone {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: #f2f6fa; border-radius: 12px; padding: 12px 13px; margin-bottom: 12px;
+  }
+  .panel-zone .meta { display: flex; flex-direction: column; gap: 4px; }
+  .panel-zone .k { font-size: 10.5px; color: var(--gray-txt); font-weight: 800; letter-spacing: .08em; }
+  .panel-zone .v { font-size: 14px; font-weight: 800; color: var(--navy); }
+  .panel-zone .sub { font-size: 11px; color: var(--slate); }
+  .zone-toggle-btn {
+    border: none; border-radius: 11px; padding: 10px 13px; cursor: pointer; font-family: inherit;
+    font-size: 12px; font-weight: 800; color: #fff; white-space: nowrap;
+    background: linear-gradient(135deg, #4066a8, #2fb9dd);
+  }
+  .zone-toggle-btn.alt { background: linear-gradient(135deg, #5d7185, #7f93a7); }
+  .zone-toggle-btn:disabled { opacity: .45; cursor: default; }
   .sec-title { font-size: 12px; font-weight: 800; color: var(--gray-txt); letter-spacing: .1em; margin: 14px 0 8px; }
 
   .runs { background: #f2f6fa; border-radius: 12px; padding: 12px; }
@@ -901,6 +916,8 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+function zoneLabel(zone) { return zone === 'auto' ? '自動化エリア' : 'ワークスペース'; }
+function zoneShortLabel(zone) { return zone === 'auto' ? '自動' : '対話'; }
 function hashString(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -913,6 +930,33 @@ function hashString(s) {
 /* ══════════ アイソメトリック投影 ══════════ */
 const VIEW = { w: 1400, h: 860 };
 const PLATE = { cx: 700, cy: 465, w: 960, h: 480 };
+const ZONE_SPLIT_U = 0.42;
+const ZONE_META = {
+  interactive: {
+    label: '💻 ワークスペース',
+    shortLabel: '対話',
+    slots: [[.16, .20], [.22, .48], [.18, .76], [.31, .62]],
+    bounds: { u1: .14, u2: .35, v1: .16, v2: .88 },
+    labelPos: { u: .10, v: .60 },
+    labelColor: '#395166',
+    countColor: '#6e8396',
+  },
+  auto: {
+    label: '⚙️ 自動化エリア',
+    shortLabel: '自動',
+    slots: [[.56, .18], [.62, .44], [.72, .68], [.54, .80]],
+    bounds: { u1: .52, u2: .76, v1: .16, v2: .86 },
+    labelPos: { u: .76, v: .20 },
+    labelColor: '#49618f',
+    countColor: '#7386b4',
+  },
+};
+const STATIONS = {
+  secretary: { u: .08, v: .10 },
+  explorer: { u: .82, v: .12 },
+  trader: { u: .79, v: .56 },
+  hustler: { u: .88, v: .82 },
+};
 // (u,v) ∈ [0,1]² → 画面座標 / (0,0)=手前, (1,1)=奥
 function iso(u, v) {
   return {
@@ -1975,10 +2019,42 @@ function buildDefs() {
   return defs;
 }
 
-function buildPlate() {
+function plateZonePolygon(zone) {
+  const A = iso(0, 0);
+  const B = iso(1, 0);
+  const C = iso(1, 1);
+  const D = iso(0, 1);
+  const P = iso(ZONE_SPLIT_U, 0);
+  const Q = iso(ZONE_SPLIT_U, 1);
+  return zone === 'auto' ? [P, B, C, Q] : [A, P, Q, D];
+}
+function pointsPath(points) {
+  return 'M' + points.map((p) => `${p.x},${p.y}`).join(' L') + ' Z';
+}
+function buildZoneLabel(zone, count) {
+  const meta = ZONE_META[zone];
+  const pt = iso(meta.labelPos.u, meta.labelPos.v);
+  const g = el('g', { transform: `translate(${pt.x},${pt.y})` });
+  g.appendChild(el('rect', {
+    x: -76, y: -26, width: 152, height: 36, rx: 12,
+    fill: zone === 'auto' ? 'rgba(235,241,255,.82)' : 'rgba(255,255,255,.82)',
+    stroke: zone === 'auto' ? 'rgba(110,136,196,.35)' : 'rgba(123,144,164,.22)',
+    'stroke-width': 1.2,
+  }));
+  const label = el('text', { x: -62, y: -4, fill: meta.labelColor, 'font-size': 14, 'font-weight': 800 });
+  txt(label, meta.label);
+  g.appendChild(label);
+  const countText = el('text', { x: -62, y: 11, fill: meta.countColor, 'font-size': 10.5, 'font-weight': 700 });
+  txt(countText, `${meta.shortLabel} ${count}件`);
+  g.appendChild(countText);
+  return g;
+}
+
+function buildPlate(zoneCounts) {
   const g = el('g');
   const A = iso(0, 0), B = iso(1, 0), C = iso(1, 1), D = iso(0, 1);
   const TH = 18;
+  const P = iso(ZONE_SPLIT_U, 0), Q = iso(ZONE_SPLIT_U, 1);
 
   // 側面(厚み)
   g.appendChild(el('path', {
@@ -1992,36 +2068,44 @@ function buildPlate() {
     d: `M${A.x},${A.y} L${B.x},${B.y} L${C.x},${C.y} L${D.x},${D.y} Z`,
     fill: 'url(#plateTop)', stroke: '#ffffff', 'stroke-width': 3, filter: 'url(#soft)',
   }));
+  g.appendChild(el('path', {
+    d: pointsPath(plateZonePolygon('auto')),
+    fill: 'rgba(218, 228, 255, .55)',
+  }));
   // 床タイルグリッド
   for (let i = 1; i < 8; i++) {
     const t = i / 8;
     const p1 = iso(t, 0), p2 = iso(t, 1), p3 = iso(0, t), p4 = iso(1, t);
-    g.appendChild(el('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, stroke: '#dde4ed', 'stroke-width': 1.2 }));
+    g.appendChild(el('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, stroke: t >= ZONE_SPLIT_U ? '#d2daf0' : '#dde4ed', 'stroke-width': 1.2 }));
     g.appendChild(el('line', { x1: p3.x, y1: p3.y, x2: p4.x, y2: p4.y, stroke: '#dde4ed', 'stroke-width': 1.2 }));
   }
+  g.appendChild(el('line', {
+    x1: P.x, y1: P.y, x2: Q.x, y2: Q.y,
+    stroke: '#9fb4da', 'stroke-width': 1.6, opacity: .85,
+  }));
+  g.appendChild(buildZoneLabel('interactive', zoneCounts.interactive || 0));
+  g.appendChild(buildZoneLabel('auto', zoneCounts.auto || 0));
   return g;
 }
 
 /* ══════════ レイアウト ══════════ */
 // デスクの配置。
 // 4台まで: 風車型(中央にミーティングテーブル) / 5台以上: グリッド配置(デスクを自動縮小)
-const SLOTS_4 = [
-  [.32, .18], [.82, .32], [.18, .68], [.70, .90],
-];
-function layoutProjects(projects) {
+function layoutZoneProjects(projects, zone) {
+  const meta = ZONE_META[zone];
   const n = projects.length;
   if (n <= 4) {
     return {
       cozy: true,
-      placed: projects.map((p, i) => ({ p, u: SLOTS_4[i][0], v: SLOTS_4[i][1], scale: 1 })),
+      placed: projects.map((p, i) => ({ p, u: meta.slots[i][0], v: meta.slots[i][1], scale: 1 })),
     };
   }
-  // グリッド: 手前の行から新しい順に埋める
+  // グリッド: ゾーン内で手前の行から新しい順に埋める
+  const { u1, u2, v1, v2 } = meta.bounds;
   const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
-  const m = .12;
-  const su = (1 - 2 * m) / cols;
-  const sv = (1 - 2 * m) / rows;
+  const su = (u2 - u1) / cols;
+  const sv = (v2 - v1) / rows;
   // 隣接デスクの画面距離からスケールを決める(デスク一式の幅 ≈ 170px)
   const gap = Math.min(su, sv) * (PLATE.w / 2) * 1.118;
   const scale = Math.max(.42, Math.min(1, gap / 175));
@@ -2029,8 +2113,8 @@ function layoutProjects(projects) {
     const col = i % cols, row = Math.floor(i / cols);
     return {
       p,
-      u: m + (col + .5) * su,
-      v: m + (row + .5) * sv, // row 0 = 手前(最新)
+      u: u1 + (col + .5) * su,
+      v: v1 + (row + .5) * sv, // row 0 = 手前(最新)
       scale,
     };
   });
@@ -2214,14 +2298,14 @@ function ambientObstacle(u, v, du, dv) {
 }
 function updateAmbientScene(cozy, placed) {
   const obstacles = [
-    ambientObstacle(.08, .08, .11, .1),
-    ambientObstacle(.90, .13, .11, .1),
-    ambientObstacle(.17, .89, .11, .1),
+    ambientObstacle(STATIONS.secretary.u, STATIONS.secretary.v, .11, .1),
+    ambientObstacle(STATIONS.explorer.u, STATIONS.explorer.v, .11, .1),
+    ambientObstacle(STATIONS.trader.u, STATIONS.trader.v, .11, .1),
+    ambientObstacle(STATIONS.hustler.u, STATIONS.hustler.v, .11, .1),
     ambientObstacle(.13, .34, .09, .08),
     ambientObstacle(.46, .94, .09, .08),
     ambientObstacle(.88, .72, .08, .08),
     ambientObstacle(.78, .86, .08, .08),
-    ambientObstacle(.88, .86, .11, .1),
   ];
   if (cozy) {
     obstacles.push(ambientObstacle(.5, .5, .09, .09));
@@ -2265,7 +2349,6 @@ function render() {
   applyView();
   svg.innerHTML = '';
   svg.appendChild(buildDefs());
-  svg.appendChild(buildPlate());
 
   // 表示期間フィルタ
   const all = DATA.projects || [];
@@ -2275,7 +2358,19 @@ function render() {
   const projects = isFinite(days)
     ? all.filter((p) => p.lastTs && now - Date.parse(p.lastTs) < days * 86400e3)
     : all;
-  const { cozy, placed } = layoutProjects(projects);
+  const zoneProjects = {
+    interactive: projects.filter((p) => p.zone !== 'auto'),
+    auto: projects.filter((p) => p.zone === 'auto'),
+  };
+  const zoneCounts = {
+    interactive: zoneProjects.interactive.length,
+    auto: zoneProjects.auto.length,
+  };
+  svg.appendChild(buildPlate(zoneCounts));
+  const interactiveLayout = layoutZoneProjects(zoneProjects.interactive, 'interactive');
+  const autoLayout = layoutZoneProjects(zoneProjects.auto, 'auto');
+  const placed = [...interactiveLayout.placed, ...autoLayout.placed];
+  const cozy = projects.length <= 4;
   const hub = iso(.5, .5);
 
   // 接続線(コンパクト表示のときのみ / 家具より下のレイヤー)
@@ -2337,7 +2432,7 @@ function render() {
 
   // 秘書(常に最前面・クリックでチャット)
   {
-    const pt = iso(.08, .08);
+    const pt = iso(STATIONS.secretary.u, STATIONS.secretary.v);
     const g = secretaryStation();
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openSPanel);
@@ -2346,7 +2441,7 @@ function render() {
 
   // 探検家(常に最前面・クリックでトピック調査)
   {
-    const pt = iso(.90, .13);
+    const pt = iso(STATIONS.explorer.u, STATIONS.explorer.v);
     const g = explorerStation(xUnread);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openXPanel);
@@ -2355,7 +2450,7 @@ function render() {
 
   // 商人(常に最前面・クリックで内職パネル)
   {
-    const pt = iso(.88, .86);
+    const pt = iso(STATIONS.hustler.u, STATIONS.hustler.v);
     const g = hustlerStation(hUnread);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openHPanel);
@@ -2364,7 +2459,7 @@ function render() {
 
   // トレーダー(常に最前面・クリックでペーパートレード)
   {
-    const pt = iso(.17, .89);
+    const pt = iso(STATIONS.trader.u, STATIONS.trader.v);
     const g = traderStation(TSTATUS && Number(TSTATUS.pnl) > 0);
     g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
     g.addEventListener('pointerdown', openTPanel);
@@ -2429,17 +2524,39 @@ function closePanel() {
   $('panel').classList.remove('open');
 }
 
+async function saveZoneOverride(projectName, zone) {
+  const r = await fetch('/api/zones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectName, zone }),
+  });
+  const j = await r.json();
+  if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  await tick();
+}
+
 function fillPanel(p) {
   $('p-name').textContent = p.name + (p.remote ? `  💻 ${p.host}` : '');
   $('p-path').textContent = (p.remote ? `${p.host}: ` : '') + (p.cwd || p.dirName);
   const stLabel = { active: '稼働中', recent: '直近実行', idle: '待機中' }[p.status];
   $('p-badges').innerHTML = `
     <span class="badge ${p.status === 'active' ? 'on' : ''}">● ${stLabel}</span>
+    <span class="badge">${p.zone === 'auto' ? '⚙️ 自動' : '💻 対話'}</span>
     <span class="badge">${p.sessionCount} セッション</span>
     <span class="badge">🔧 ${fmtNum(p.totalToolCalls)}</span>
     <span class="badge">⚡ ${fmtNum(p.outputTokens)} tok</span>`;
 
+  const nextZone = p.zone === 'auto' ? 'interactive' : 'auto';
   let html = '';
+  html += `<div class="panel-zone">
+    <div class="meta">
+      <div class="k">ZONE</div>
+      <div class="v">${p.zone === 'auto' ? '⚙️ 自動化エリア' : '💻 ワークスペース'}</div>
+      <div class="sub">${p.zoneOverride ? '手動固定中' : `自動判定: ${zoneLabel(p.inferredZone)}`}${p.remote ? ' ・ リモートプロジェクト' : ''}</div>
+    </div>
+    ${p.remote ? '<button class="zone-toggle-btn alt" disabled>元ホストで切替</button>'
+      : `<button class="zone-toggle-btn" onclick='toggleProjectZone(${JSON.stringify(p.name)}, ${JSON.stringify(nextZone)})'>${nextZone === 'auto' ? '自動エリアへ移動' : '対話エリアへ移動'}</button>`}
+  </div>`;
   html += '<div class="sec-title">実行タイムライン(直近30日)</div>';
   html += `<div class="runs">${runsTimeline(p)}</div>`;
   html += `<div class="sec-title">セッション一覧</div>`;
@@ -2466,6 +2583,16 @@ function fillPanel(p) {
   }
   if (!p.sessions.length) html += '<div class="empty">セッションがありません</div>';
   $('p-body').innerHTML = html;
+}
+
+async function toggleProjectZone(projectName, zone) {
+  try {
+    await saveZoneOverride(projectName, zone);
+    const refreshed = (DATA.projects || []).find((x) => x.name === projectName && !x.remote);
+    if (refreshed) fillPanel(refreshed);
+  } catch (e) {
+    alert('ゾーンを切り替えできませんでした: ' + e.message);
+  }
 }
 
 /** 直近30日の実行状況(SVG文字列) */

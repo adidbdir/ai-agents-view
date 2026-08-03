@@ -28,6 +28,7 @@ const TRADER_DIR = path.join(DATA_DIR, 'trader');
 const TRADER_PRICES_PATH = path.join(TRADER_DIR, 'prices.jsonl');
 const TRADER_PORTFOLIO_PATH = path.join(TRADER_DIR, 'portfolio.json');
 const TRADER_CONFIG_PATH = path.join(__dirname, 'trader-config.json');
+const ZONE_OVERRIDES_PATH = path.join(__dirname, 'zone-overrides.json');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
 const HUSTLER_CHECK_MS = 10 * 60 * 1000;
 const HUSTLER_TOKEN_HEADROOM = 120000;
@@ -35,6 +36,9 @@ const HUSTLER_JOB_TYPES = new Set(['article_draft', 'affiliate_article', 'sns_pa
 const HUSTLER_REVIEW_JOB_TYPES = new Set(['article_draft', 'affiliate_article']);
 const HUSTLER_PUBLISH_TARGETS = new Set(['zenn', 'generic', 'none']);
 const TRADER_ACTIONS = new Set(['buy', 'sell', 'hold']);
+const SESSION_ZONE_AUTO = 'auto';
+const SESSION_ZONE_INTERACTIVE = 'interactive';
+const AUTO_PROMPT_CHARS = 220;
 const DEFAULT_TRADER_PATHS = {
   dir: TRADER_DIR,
   pricesPath: TRADER_PRICES_PATH,
@@ -93,14 +97,24 @@ function safeJson(line) {
   try { return JSON.parse(line); } catch { return null; }
 }
 
+function extractUserPromptText(message) {
+  if (!message || message.role !== 'user') return '';
+  const c = message.content;
+  if (typeof c === 'string') return c.trim();
+  if (!Array.isArray(c)) return '';
+  return c
+    .filter((b) => b && b.type === 'text' && String(b.text || '').trim())
+    .map((b) => String(b.text || '').trim())
+    .join('\n')
+    .trim();
+}
+
 /** user メッセージが「実際の依頼(テキスト発話)」か。tool_result / 画像のみ / 空 は false */
 function isUserPrompt(message) {
   if (!message || message.role !== 'user') return false;
   const c = message.content;
-  if (typeof c === 'string') return c.trim().length > 0;
-  if (!Array.isArray(c)) return false;
-  if (c.some((b) => b && b.type === 'tool_result')) return false;
-  return c.some((b) => b && b.type === 'text' && String(b.text || '').trim().length > 0);
+  if (Array.isArray(c) && c.some((b) => b && b.type === 'tool_result')) return false;
+  return extractUserPromptText(message).length > 0;
 }
 
 /** 1 セッション (.jsonl) を集計する */
@@ -125,6 +139,7 @@ function parseSession(filePath, stat) {
     outputTokens: 0,
     inputTokens: 0,
     firstPrompt: null,
+    firstPromptChars: 0,
     fileMtime: stat.mtimeMs,
     fileSize: stat.size,
     hourly: {},           // 'YYYY-MM-DDTHH' -> event count (タイムライン用)
@@ -162,8 +177,10 @@ function parseSession(filePath, stat) {
       summary.lastUserToolResult = Array.isArray(o.message.content)
         && o.message.content.some((b) => b && b.type === 'tool_result');
       if (!o.isSidechain && isUserPrompt(o.message)) summary.promptCount++;
-      if (!summary.firstPrompt && typeof o.message.content === 'string') {
-        summary.firstPrompt = o.message.content.slice(0, 120);
+      const promptText = extractUserPromptText(o.message);
+      if (!summary.firstPrompt && promptText) {
+        summary.firstPrompt = promptText.slice(0, 120);
+        summary.firstPromptChars = promptText.length;
       }
       if (ts) {
         const h = ts.slice(0, 13);
@@ -260,6 +277,27 @@ function sessionStatus(s, now) {
   return 'idle';
 }
 
+function isSubPath(parent, target) {
+  if (!parent || !target) return false;
+  const rel = path.relative(parent, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function classifySessionZone(session) {
+  if (session.cwd && isSubPath(os.tmpdir(), session.cwd)) return SESSION_ZONE_AUTO;
+  if (session.promptCount === 1 && session.firstPromptChars >= AUTO_PROMPT_CHARS) return SESSION_ZONE_AUTO;
+  return SESSION_ZONE_INTERACTIVE;
+}
+
+function chooseProjectZone(sessions) {
+  const counts = { [SESSION_ZONE_AUTO]: 0, [SESSION_ZONE_INTERACTIVE]: 0 };
+  for (const session of sessions) counts[session.zone] = (counts[session.zone] || 0) + 1;
+  if (counts.auto !== counts.interactive) {
+    return counts.auto > counts.interactive ? SESSION_ZONE_AUTO : SESSION_ZONE_INTERACTIVE;
+  }
+  return sessions[0]?.zone || SESSION_ZONE_INTERACTIVE;
+}
+
 // この時間、Claude の応答が進まなければ「対応待ち(承認プロンプト等で停止)」とみなす。
 const APPROVAL_IDLE_MS = 15000;
 /**
@@ -283,6 +321,7 @@ function sessionWaiting(s, now) {
 function collect() {
   const now = Date.now();
   const projects = [];
+  const zoneOverrides = loadZoneOverrides();
 
   let dirs = [];
   try {
@@ -312,6 +351,7 @@ function collect() {
       s.agents = parseAgents(path.join(projDir, s.sessionId), now);
       s.totalAgents = s.agents.length;
       s.runningAgents = s.agents.filter((a) => a.running).length;
+      s.zone = classifySessionZone(s);
       sessions.push(s);
     }
     sessions.sort((a, b) => (b.lastTs || '').localeCompare(a.lastTs || ''));
@@ -319,11 +359,16 @@ function collect() {
     // フォルダ名からプロジェクト表示名を復元 ("-Users-x-foo-bar" -> "foo/bar" 末尾側)
     const cwd = sessions.find((s) => s.cwd)?.cwd;
     const name = cwd ? path.basename(cwd) : d.name.split('-').filter(Boolean).slice(-2).join('/');
+    const inferredZone = chooseProjectZone(sessions);
+    const overrideZone = zoneOverrides[name] || null;
 
     const agg = {
       dirName: d.name,
       name,
       cwd: cwd || null,
+      zone: overrideZone || inferredZone,
+      zoneOverride: overrideZone,
+      inferredZone,
       sessionCount: sessions.length,
       status: sessions.some((s) => s.status === 'active') ? 'active'
         : sessions.some((s) => s.status === 'recent') ? 'recent' : 'idle',
@@ -763,6 +808,35 @@ function makeId(prefix) {
 
 function readJsonFileSafe(filePath, fallback) {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return fallback; }
+}
+
+function sanitizeZone(value) {
+  return value === SESSION_ZONE_AUTO || value === SESSION_ZONE_INTERACTIVE ? value : null;
+}
+
+function loadZoneOverrides() {
+  const raw = readJsonFileSafe(ZONE_OVERRIDES_PATH, {});
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const clean = {};
+  for (const [projectName, zone] of Object.entries(raw)) {
+    const name = String(projectName || '').trim();
+    const normalized = sanitizeZone(zone);
+    if (name && normalized) clean[name] = normalized;
+  }
+  return clean;
+}
+
+function saveZoneOverrides(overrides) {
+  const clean = loadZoneOverrides();
+  for (const [projectName, zone] of Object.entries(overrides || {})) {
+    const name = String(projectName || '').trim();
+    const normalized = sanitizeZone(zone);
+    if (!name) continue;
+    if (normalized) clean[name] = normalized;
+    else delete clean[name];
+  }
+  fs.writeFileSync(ZONE_OVERRIDES_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
 }
 
 function parseClockMinutes(raw) {
@@ -3896,6 +3970,26 @@ const server = http.createServer((req, res) => {
       })
       .catch((e) => sendJson(res, 500, { error: String(e.message) }));
     return;
+  }
+
+  if (url.pathname === '/api/zones') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, loadZoneOverrides());
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const projectName = String(body.projectName || '').trim();
+          const zone = sanitizeZone(body.zone);
+          if (!projectName) throw new Error('projectName が必要です');
+          if (!zone) throw new Error('zone は auto または interactive を指定してください');
+          const overrides = saveZoneOverrides({ [projectName]: zone });
+          sendJson(res, 200, { ok: true, projectName, zone, overrides });
+        })
+        .catch((e) => sendJson(res, 400, { ok: false, error: String(e.message) }));
+      return;
+    }
   }
 
   if (url.pathname === '/api/data') {
