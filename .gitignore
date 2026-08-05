@@ -10,5 +10,6 @@ secretary-state.json
 hustler-config.json
 trader-config.json
 creator-config.json
+appraiser-config.json
 zone-overrides.json
 data/

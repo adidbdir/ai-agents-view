@@ -34,6 +34,12 @@ const TRADER_PRICES_PATH = path.join(TRADER_DIR, 'prices.jsonl');
 const TRADER_PORTFOLIO_PATH = path.join(TRADER_DIR, 'portfolio.json');
 const TRADER_CONFIG_PATH = path.join(__dirname, 'trader-config.json');
 const TRADER_STATE_PATH = path.join(TRADER_DIR, 'state.json');
+const APPRAISER_DIR = path.join(DATA_DIR, 'appraiser');
+const APPRAISER_REPORTS_DIR = path.join(APPRAISER_DIR, 'reports');
+const APPRAISER_ITEMS_PATH = path.join(APPRAISER_DIR, 'items.json');
+const APPRAISER_SEEN_PATH = path.join(APPRAISER_DIR, 'seen.json');
+const APPRAISER_STATE_PATH = path.join(APPRAISER_DIR, 'state.json');
+const APPRAISER_CONFIG_PATH = path.join(__dirname, 'appraiser-config.json');
 const ZONE_OVERRIDES_PATH = path.join(__dirname, 'zone-overrides.json');
 const CREATOR_REF_IMAGE_PATH = path.join(__dirname, 'assets', 'h3', 'character_ref.png');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
@@ -46,6 +52,8 @@ const CREATOR_PRIVACY_STATUSES = new Set(['public', 'private', 'unlisted']);
 const CREATOR_JOB_STATUSES = new Set(['pending', 'scripting', 'rendering', 'reviewing', 'approved', 'pending_review', 'publishing', 'published', 'error']);
 const CREATOR_RESTARTABLE_STATUSES = new Set(['scripting', 'rendering', 'reviewing', 'publishing']);
 const CREATOR_UNFINISHED_STATUSES = new Set(['pending', 'scripting', 'rendering', 'reviewing', 'approved', 'pending_review', 'publishing']);
+const APPRAISER_ITEM_STATUSES = new Set(['pending', 'classifying', 'researching', 'testing', 'done', 'error']);
+const APPRAISER_CATEGORIES = new Set(['research', 'money', 'tool', 'other']);
 const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
 const TRADER_ACTIONS = new Set(['buy', 'sell', 'hold']);
 const SESSION_ZONE_AUTO = 'auto';
@@ -852,12 +860,39 @@ const DEFAULT_TRADER_FETCH_STATE = {
   lastFetchError: '',
   lastFetchProvider: null,
 };
+const DEFAULT_APPRAISER_CONFIG = {
+  handsOn: false,
+  testTimeoutSec: 900,
+  interestProfile: 'AI/ロボティクス研究、AIエージェントの収益化、個人開発での技術活用に関心が高い。',
+  xApi: {
+    bearerToken: '',
+    userId: '',
+    pollBookmarks: true,
+    pollLikes: false,
+    intervalHours: 6,
+  },
+};
+const DEFAULT_APPRAISER_SEEN = {
+  bookmarks: [],
+  likes: [],
+};
+const DEFAULT_APPRAISER_STATE = {
+  xPolling: {
+    lastPollAt: null,
+    lastSuccessAt: null,
+    lastImported: { bookmarks: 0, likes: 0 },
+    lastError: '',
+    authError: null,
+  },
+};
 const TRADER_PRICE_PROVIDERS = new Set(['auto', 'coingecko', 'yahoo']);
 const TRADER_PROVIDER_MEMO_MS = 60 * 60 * 1000;
 
 let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 let creatorRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 let traderRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+let appraiserRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+let appraiserRunningItemId = null;
 const HUSTLER_JOB_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved', 'rejected', 'published', 'error']);
 const HUSTLER_RESTARTABLE_STATUSES = new Set(['running', 'evaluating', 'revising']);
 const HUSTLER_UNFINISHED_TOPIC_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved']);
@@ -1120,12 +1155,31 @@ function ensureTraderStorage(paths = null) {
   return p;
 }
 
+function ensureAppraiserStorage() {
+  ensureDir(APPRAISER_DIR);
+  ensureDir(APPRAISER_REPORTS_DIR);
+  if (!fs.existsSync(APPRAISER_ITEMS_PATH)) fs.writeFileSync(APPRAISER_ITEMS_PATH, '[]\n');
+  if (!fs.existsSync(APPRAISER_SEEN_PATH)) fs.writeFileSync(APPRAISER_SEEN_PATH, JSON.stringify(DEFAULT_APPRAISER_SEEN, null, 2) + '\n');
+  if (!fs.existsSync(APPRAISER_STATE_PATH)) fs.writeFileSync(APPRAISER_STATE_PATH, JSON.stringify(DEFAULT_APPRAISER_STATE, null, 2) + '\n');
+  if (!fs.existsSync(APPRAISER_CONFIG_PATH)) fs.writeFileSync(APPRAISER_CONFIG_PATH, JSON.stringify(DEFAULT_APPRAISER_CONFIG, null, 2) + '\n');
+}
+
 function makeId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function readJsonFileSafe(filePath, fallback) {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return fallback; }
+}
+
+function escapeHtml(text) {
+  return String(text ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
 }
 
 function sanitizeZone(value) {
@@ -4507,6 +4561,1035 @@ async function maybeRunTraderScheduled(now = new Date()) {
   return analyzeTrader({ config, now, runtime });
 }
 
+function sanitizeAppraiserXApiConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    bearerToken: typeof src.bearerToken === 'string' ? src.bearerToken.trim().slice(0, 4000) : '',
+    userId: typeof src.userId === 'string' ? src.userId.trim().replace(/[^\d]/g, '').slice(0, 32) : '',
+    pollBookmarks: src.pollBookmarks !== false,
+    pollLikes: !!src.pollLikes,
+    intervalHours: Math.max(1, Math.min(24 * 14, Math.round(Number(src.intervalHours) || DEFAULT_APPRAISER_CONFIG.xApi.intervalHours))),
+  };
+}
+
+function sanitizeAppraiserConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    handsOn: !!src.handsOn,
+    testTimeoutSec: Math.max(60, Math.min(3600, Math.round(Number(src.testTimeoutSec) || DEFAULT_APPRAISER_CONFIG.testTimeoutSec))),
+    interestProfile: typeof src.interestProfile === 'string' && src.interestProfile.trim()
+      ? src.interestProfile.trim().slice(0, 2000)
+      : DEFAULT_APPRAISER_CONFIG.interestProfile,
+    xApi: sanitizeAppraiserXApiConfig({ ...DEFAULT_APPRAISER_CONFIG.xApi, ...(src.xApi || {}) }),
+  };
+}
+
+function loadAppraiserConfig() {
+  ensureAppraiserStorage();
+  const stored = readJsonFileSafe(APPRAISER_CONFIG_PATH, DEFAULT_APPRAISER_CONFIG);
+  return sanitizeAppraiserConfig({ ...DEFAULT_APPRAISER_CONFIG, ...stored });
+}
+
+function normalizeAppraiserState(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const xPolling = (src.xPolling && typeof src.xPolling === 'object') ? src.xPolling : {};
+  const authError = xPolling.authError && typeof xPolling.authError === 'object'
+    ? {
+      at: typeof xPolling.authError.at === 'string' ? xPolling.authError.at : new Date().toISOString(),
+      message: typeof xPolling.authError.message === 'string' ? xPolling.authError.message.slice(0, 400) : 'X API 認証エラー',
+      status: Math.max(0, Math.min(999, Math.round(Number(xPolling.authError.status) || 401))),
+    }
+    : null;
+  return {
+    xPolling: {
+      lastPollAt: typeof xPolling.lastPollAt === 'string' ? xPolling.lastPollAt : null,
+      lastSuccessAt: typeof xPolling.lastSuccessAt === 'string' ? xPolling.lastSuccessAt : null,
+      lastImported: {
+        bookmarks: Math.max(0, Math.min(10000, Math.round(Number(xPolling.lastImported && xPolling.lastImported.bookmarks) || 0))),
+        likes: Math.max(0, Math.min(10000, Math.round(Number(xPolling.lastImported && xPolling.lastImported.likes) || 0))),
+      },
+      lastError: typeof xPolling.lastError === 'string' ? xPolling.lastError.slice(0, 500) : '',
+      authError,
+    },
+  };
+}
+
+function saveAppraiserState(input) {
+  ensureAppraiserStorage();
+  const clean = normalizeAppraiserState(input);
+  fs.writeFileSync(APPRAISER_STATE_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function loadAppraiserState() {
+  ensureAppraiserStorage();
+  const raw = readJsonFileSafe(APPRAISER_STATE_PATH, DEFAULT_APPRAISER_STATE);
+  const clean = normalizeAppraiserState(raw);
+  fs.writeFileSync(APPRAISER_STATE_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function saveAppraiserConfig(config) {
+  ensureAppraiserStorage();
+  const clean = sanitizeAppraiserConfig(config);
+  fs.writeFileSync(APPRAISER_CONFIG_PATH, JSON.stringify(clean, null, 2) + '\n');
+  const state = loadAppraiserState();
+  if (state.xPolling.authError) {
+    saveAppraiserState({
+      ...state,
+      xPolling: { ...state.xPolling, authError: null, lastError: '' },
+    });
+  }
+  return clean;
+}
+
+function normalizeAppraiserStatus(status, fallback = 'pending') {
+  return APPRAISER_ITEM_STATUSES.has(status) ? status : fallback;
+}
+
+function normalizeAppraiserCategory(category, fallback = 'other') {
+  return APPRAISER_CATEGORIES.has(category) ? category : fallback;
+}
+
+function normalizeAppraiserClassification(input) {
+  if (!input || typeof input !== 'object') return null;
+  const relevance = Math.max(0, Math.min(100, Math.round(Number(input.relevance) || 0)));
+  return {
+    category: normalizeAppraiserCategory(input.category),
+    relevance,
+    reason: typeof input.reason === 'string' ? input.reason.trim().slice(0, 2000) : '',
+  };
+}
+
+function normalizeAppraiserVerdict(input) {
+  if (!input || typeof input !== 'object') return null;
+  const score = Math.max(0, Math.min(100, Math.round(Number(input.score) || 0)));
+  const testResult = input.testResult && typeof input.testResult === 'object'
+    ? {
+      status: typeof input.testResult.status === 'string' ? input.testResult.status.trim().slice(0, 40) : '',
+      summary: typeof input.testResult.summary === 'string' ? input.testResult.summary.trim().slice(0, 4000) : '',
+      output: typeof input.testResult.output === 'string' ? input.testResult.output.trim().slice(0, 12000) : '',
+      repoUrl: typeof input.testResult.repoUrl === 'string' ? input.testResult.repoUrl.trim().slice(0, 2000) : '',
+    }
+    : null;
+  return {
+    score,
+    summary: typeof input.summary === 'string' ? input.summary.trim().slice(0, 4000) : '',
+    novelty: typeof input.novelty === 'string' ? input.novelty.trim().slice(0, 4000) : '',
+    howToUse: typeof input.howToUse === 'string' ? input.howToUse.trim().slice(0, 4000) : '',
+    monetizationIdea: typeof input.monetizationIdea === 'string' ? input.monetizationIdea.trim().slice(0, 4000) : '',
+    nextAction: typeof input.nextAction === 'string' ? input.nextAction.trim().slice(0, 2000) : '',
+    sources: uniqStrings(input.sources, 20, 2000),
+    testResult,
+    merchantQueued: !!input.merchantQueued,
+    merchantJobId: typeof input.merchantJobId === 'string' ? input.merchantJobId.slice(0, 80) : null,
+  };
+}
+
+function normalizeAppraiserItem(input) {
+  if (!input || typeof input !== 'object') return null;
+  const createdAt = typeof input.createdAt === 'string' ? input.createdAt : new Date().toISOString();
+  const updatedAt = typeof input.updatedAt === 'string' ? input.updatedAt : createdAt;
+  const classification = normalizeAppraiserClassification(input.classification);
+  const verdict = normalizeAppraiserVerdict(input.verdict);
+  const links = uniqStrings(input.links, 20, 2000);
+  return {
+    id: typeof input.id === 'string' ? input.id : makeId('app'),
+    url: typeof input.url === 'string' ? input.url.trim().slice(0, 2000) : '',
+    note: typeof input.note === 'string' ? input.note.trim().slice(0, 4000) : '',
+    title: typeof input.title === 'string' ? input.title.trim().slice(0, 300) : '',
+    tweetId: typeof input.tweetId === 'string' ? input.tweetId.trim().slice(0, 64) : '',
+    tweetText: typeof input.tweetText === 'string' ? input.tweetText.trim().slice(0, 12000) : '',
+    links,
+    status: normalizeAppraiserStatus(input.status),
+    classification,
+    verdict,
+    source: typeof input.source === 'string' ? input.source.trim().slice(0, 80) : 'manual',
+    reportId: typeof input.reportId === 'string' ? input.reportId.slice(0, 80) : null,
+    error: typeof input.error === 'string' ? input.error.slice(0, 500) : null,
+    createdAt,
+    updatedAt,
+    startedAt: typeof input.startedAt === 'string' ? input.startedAt : null,
+    finishedAt: typeof input.finishedAt === 'string' ? input.finishedAt : null,
+  };
+}
+
+function loadAppraiserItems() {
+  ensureAppraiserStorage();
+  const arr = readJsonFileSafe(APPRAISER_ITEMS_PATH, []);
+  return Array.isArray(arr) ? arr.map(normalizeAppraiserItem).filter(Boolean) : [];
+}
+
+function saveAppraiserItems(items) {
+  ensureAppraiserStorage();
+  fs.writeFileSync(APPRAISER_ITEMS_PATH, JSON.stringify((Array.isArray(items) ? items : []).map(normalizeAppraiserItem).filter(Boolean), null, 2) + '\n');
+}
+
+function updateAppraiserItemById(itemId, updater) {
+  const items = loadAppraiserItems();
+  const idx = items.findIndex((item) => item.id === itemId);
+  if (idx < 0) return null;
+  const next = updater(items[idx]) || items[idx];
+  items[idx] = normalizeAppraiserItem({ ...items[idx], ...next, id: itemId, updatedAt: new Date().toISOString() });
+  saveAppraiserItems(items);
+  return items[idx];
+}
+
+function appraiserReportPath(reportId) {
+  return path.join(APPRAISER_REPORTS_DIR, `${reportId}.md`);
+}
+
+function saveAppraiserReport(reportId, meta, body) {
+  ensureAppraiserStorage();
+  fs.writeFileSync(appraiserReportPath(reportId), outputFrontMatter(meta) + String(body || '').trim() + '\n');
+}
+
+function readAppraiserReport(reportId) {
+  if (!/^[a-z0-9-]+$/i.test(reportId || '')) return null;
+  const filePath = appraiserReportPath(reportId);
+  if (!fs.existsSync(filePath)) return null;
+  const { meta, body } = parseOutputFile(filePath);
+  return {
+    id: reportId,
+    ...meta,
+    body,
+  };
+}
+
+function listAppraiserReports() {
+  ensureAppraiserStorage();
+  let files = [];
+  try { files = fs.readdirSync(APPRAISER_REPORTS_DIR).filter((file) => file.endsWith('.md')); } catch { return []; }
+  const out = [];
+  for (const file of files) {
+    const report = readAppraiserReport(file.replace(/\.md$/, ''));
+    if (!report) continue;
+    out.push({
+      id: report.id,
+      itemId: report.itemId || null,
+      url: report.url || '',
+      title: report.title || report.summary || '',
+      category: normalizeAppraiserCategory(report.category),
+      relevance: Math.max(0, Math.min(100, Math.round(Number(report.relevance) || 0))),
+      score: Math.max(0, Math.min(100, Math.round(Number(report.score) || 0))),
+      summary: typeof report.summary === 'string' ? report.summary.slice(0, 300) : '',
+      merchantQueued: !!report.merchantQueued,
+      merchantJobId: typeof report.merchantJobId === 'string' ? report.merchantJobId : null,
+      updatedAt: typeof report.updatedAt === 'string' ? report.updatedAt : (typeof report.createdAt === 'string' ? report.createdAt : null),
+      createdAt: typeof report.createdAt === 'string' ? report.createdAt : null,
+    });
+  }
+  out.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  return out;
+}
+
+function loadAppraiserSeen() {
+  ensureAppraiserStorage();
+  const raw = readJsonFileSafe(APPRAISER_SEEN_PATH, DEFAULT_APPRAISER_SEEN);
+  const clean = {};
+  for (const key of ['bookmarks', 'likes']) {
+    clean[key] = uniqStrings(raw && raw[key], 5000, 80);
+  }
+  return clean;
+}
+
+function saveAppraiserSeen(seen) {
+  ensureAppraiserStorage();
+  const clean = {
+    bookmarks: uniqStrings(seen && seen.bookmarks, 5000, 80),
+    likes: uniqStrings(seen && seen.likes, 5000, 80),
+  };
+  fs.writeFileSync(APPRAISER_SEEN_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function appraiserDecodeHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+function appraiserHtmlToText(html) {
+  return appraiserDecodeHtmlEntities(String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|section|article|li|h\d)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' '))
+    .trim();
+}
+
+function appraiserExtractLinksFromText(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /https?:\/\/[^\s<>"')\]]+/g;
+  for (const match of String(text || '').match(re) || []) {
+    const url = match.replace(/[),.;!?]+$/, '');
+    if (!/^https?:\/\//i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function appraiserTitleFromText(text, fallback = '') {
+  const line = String(text || '').split('\n').map((item) => item.trim()).find(Boolean) || '';
+  return (line || fallback || '').slice(0, 300);
+}
+
+function appraiserIsXPostUrl(url) {
+  return /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/[^/]+\/status\/\d+/i.test(String(url || '').trim());
+}
+
+function appraiserParseGithubRepo(url) {
+  const m = String(url || '').trim().match(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/#?]+)(?:[/?#]|$)/i);
+  if (!m) return null;
+  const owner = m[1];
+  const repo = m[2].replace(/\.git$/i, '');
+  if (!owner || !repo) return null;
+  return { owner, repo, fullName: `${owner}/${repo}`, cloneUrl: `https://github.com/${owner}/${repo}.git`, webUrl: `https://github.com/${owner}/${repo}` };
+}
+
+function appraiserParseArxivId(url) {
+  const m = String(url || '').trim().match(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/([a-z0-9.+/-]+?)(?:\.pdf)?(?:[?#].*)?$/i);
+  return m ? m[1] : null;
+}
+
+function appraiserCollectItemLinks(item) {
+  return uniqStrings([
+    ...(item.links || []),
+    ...appraiserExtractLinksFromText(item.tweetText),
+    ...appraiserExtractLinksFromText(item.note),
+    item.url,
+  ].filter(Boolean), 20, 2000);
+}
+
+async function appraiserFetchTwitterOembed(url, fetchImpl = fetch) {
+  const endpoint = 'https://publish.twitter.com/oembed?' + new URLSearchParams({ url: String(url || '').trim(), omit_script: 'true' });
+  const res = await fetchImpl(endpoint, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`oEmbed ${res.status}`);
+  const json = await res.json();
+  const text = appraiserHtmlToText(json && json.html);
+  return {
+    title: appraiserTitleFromText(text),
+    tweetText: text,
+    authorName: typeof json.author_name === 'string' ? json.author_name : '',
+  };
+}
+
+function appraiserRepoFromItem(item) {
+  for (const link of appraiserCollectItemLinks(item)) {
+    const repo = appraiserParseGithubRepo(link);
+    if (repo) return repo;
+  }
+  return null;
+}
+
+async function appraiserFetchGithubContext(repo, fetchImpl = fetch) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ai-agents-view' };
+  const repoRes = await fetchImpl(`https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`, { headers });
+  if (!repoRes.ok) throw new Error(`GitHub repo ${repoRes.status}`);
+  const repoJson = await repoRes.json();
+  const readmeRes = await fetchImpl(`https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/readme`, { headers });
+  let readme = '';
+  if (readmeRes.ok) {
+    const readmeJson = await readmeRes.json();
+    if (readmeJson && readmeJson.content) {
+      try { readme = Buffer.from(String(readmeJson.content).replace(/\s+/g, ''), 'base64').toString('utf8'); } catch { /* ignore */ }
+    }
+  }
+  const description = typeof repoJson.description === 'string' ? repoJson.description : '';
+  const topics = Array.isArray(repoJson.topics) ? repoJson.topics.join(', ') : '';
+  return {
+    kind: 'github',
+    url: repo.webUrl,
+    title: repo.fullName,
+    text: [
+      `Repository: ${repo.fullName}`,
+      description ? `Description: ${description}` : '',
+      topics ? `Topics: ${topics}` : '',
+      Number.isFinite(Number(repoJson.stargazers_count)) ? `Stars: ${repoJson.stargazers_count}` : '',
+      Number.isFinite(Number(repoJson.forks_count)) ? `Forks: ${repoJson.forks_count}` : '',
+      typeof repoJson.language === 'string' && repoJson.language ? `Language: ${repoJson.language}` : '',
+      typeof repoJson.updated_at === 'string' ? `Updated: ${repoJson.updated_at}` : '',
+      readme ? `README:\n${readme.slice(0, 20000)}` : '',
+    ].filter(Boolean).join('\n'),
+    metadata: {
+      fullName: repo.fullName,
+      cloneUrl: repo.cloneUrl,
+      stars: repoJson.stargazers_count || 0,
+      language: repoJson.language || '',
+    },
+  };
+}
+
+async function appraiserFetchArxivContext(url, fetchImpl = fetch) {
+  const id = appraiserParseArxivId(url);
+  if (!id) throw new Error('arXiv URL ではありません');
+  const res = await fetchImpl(`https://arxiv.org/abs/${id}`, { headers: { Accept: 'text/html' } });
+  if (!res.ok) throw new Error(`arXiv ${res.status}`);
+  const html = await res.text();
+  const title = appraiserDecodeHtmlEntities((html.match(/<meta\s+name="citation_title"\s+content="([^"]+)"/i) || [])[1] || (html.match(/<title>([^<]+)<\/title>/i) || [])[1] || `arXiv:${id}`);
+  const authors = [...html.matchAll(/<meta\s+name="citation_author"\s+content="([^"]+)"/gi)].map((m) => appraiserDecodeHtmlEntities(m[1])).slice(0, 12);
+  const abstract = appraiserHtmlToText((html.match(/<blockquote[^>]*class="abstract[^"]*"[^>]*>([\s\S]*?)<\/blockquote>/i) || [])[1] || '');
+  return {
+    kind: 'arxiv',
+    url: `https://arxiv.org/abs/${id}`,
+    title,
+    text: [
+      `Title: ${title}`,
+      authors.length ? `Authors: ${authors.join(', ')}` : '',
+      abstract ? `Abstract:\n${abstract}` : '',
+    ].filter(Boolean).join('\n'),
+    metadata: { arxivId: id },
+  };
+}
+
+async function appraiserFetchGenericContext(url, fetchImpl = fetch) {
+  const res = await fetchImpl(url, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+      'User-Agent': 'Mozilla/5.0 ai-agents-view',
+    },
+    redirect: 'follow',
+  });
+  if (!res.ok) throw new Error(`fetch ${res.status}`);
+  const contentType = String(res.headers.get('content-type') || '');
+  if (contentType.includes('application/json')) {
+    const json = await res.json();
+    const text = JSON.stringify(json, null, 2).slice(0, 20000);
+    return { kind: 'json', url, title: appraiserTitleFromText(url, url), text, metadata: {} };
+  }
+  const html = await res.text();
+  const title = appraiserDecodeHtmlEntities((html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || [])[1] || (html.match(/<title>([^<]+)<\/title>/i) || [])[1] || url);
+  const desc = appraiserDecodeHtmlEntities((html.match(/<meta\s+name="description"\s+content="([^"]+)"/i) || [])[1] || (html.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i) || [])[1] || '');
+  const text = appraiserHtmlToText(html).slice(0, 20000);
+  return {
+    kind: 'web',
+    url,
+    title,
+    text: [title ? `Title: ${title}` : '', desc ? `Description: ${desc}` : '', text].filter(Boolean).join('\n'),
+    metadata: {},
+  };
+}
+
+async function appraiserFetchLinkContext(url, fetchImpl = fetch) {
+  const repo = appraiserParseGithubRepo(url);
+  if (repo) return appraiserFetchGithubContext(repo, fetchImpl);
+  if (appraiserParseArxivId(url)) return appraiserFetchArxivContext(url, fetchImpl);
+  return appraiserFetchGenericContext(url, fetchImpl);
+}
+
+function appraiserPromptPrelude(config) {
+  return `ユーザー関心プロフィール: ${config.interestProfile}\n重点: AI/ロボティクス研究に役立つ技術、AIエージェントの収益化、個人開発での再現性と実装可能性。`;
+}
+
+function appraiserParseJson(text) {
+  return JSON.parse(stripJsonCodeFence(text));
+}
+
+async function runAppraiserJsonTask({ cfg, prompt, timeoutSec, maxTokens = 2200, useResearch = false }) {
+  let lastErr = null;
+  let currentPrompt = prompt;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = useResearch
+      ? (cfg.mode === 'api'
+        ? await runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt: currentPrompt })
+        : await runResearchCli({ cli: cfg.cli, model: cfg.model, prompt: currentPrompt }))
+      : await runHustlerTextTask({
+        cfg,
+        system: 'あなたは技術調査アシスタントです。指定された JSON スキーマどおりに JSON のみ返してください。',
+        prompt: currentPrompt,
+        maxTokens,
+        timeoutSec,
+      });
+    try {
+      return appraiserParseJson(raw);
+    } catch (error) {
+      lastErr = error;
+      currentPrompt = `${prompt}\n\n前回は JSON 解析に失敗しました。コードフェンスや説明文なしで、必ず JSON のみを返してください。`;
+    }
+  }
+  throw lastErr || new Error('JSON解析に失敗しました');
+}
+
+async function classifyAppraiserItem(item, cfg, config, timeoutSec) {
+  const prompt = `${appraiserPromptPrelude(config)}
+
+次の受信アイテムを分類してください。
+- category は research | money | tool | other
+- relevance は 0-100
+- reason は日本語で簡潔に
+- 研究価値・収益化可能性・再現性を重視
+- JSON のみ返す
+
+入力:
+${JSON.stringify({
+    url: item.url,
+    note: item.note,
+    tweetText: item.tweetText,
+    links: appraiserCollectItemLinks(item),
+  }, null, 2)}
+
+返却スキーマ:
+{"category":"research|money|tool|other","relevance":0,"reason":"..."}`
+;
+  return normalizeAppraiserClassification(await runAppraiserJsonTask({ cfg, prompt, timeoutSec, maxTokens: 900 }));
+}
+
+async function appraiserResearchVerdict(item, cfg, config, contexts, timeoutSec) {
+  const prompt = `${appraiserPromptPrelude(config)}
+
+次の受信アイテムを調査し、研究価値または収益価値を評価してください。
+- 必要に応じて Web 検索を使って補完してよい
+- 事実と推測を混同しない
+- summary / novelty / howToUse / nextAction は日本語で具体的に
+- monetizationIdea は category が money に近いときだけ積極的に具体化
+- score は 0-100
+- JSON のみ返す
+
+入力メタ:
+${JSON.stringify({
+    url: item.url,
+    note: item.note,
+    tweetText: item.tweetText,
+    classification: item.classification,
+    links: appraiserCollectItemLinks(item),
+  }, null, 2)}
+
+取得済みコンテキスト:
+${JSON.stringify(contexts.map((ctx) => ({
+    kind: ctx.kind,
+    url: ctx.url,
+    title: ctx.title,
+    text: String(ctx.text || '').slice(0, 8000),
+  })), null, 2)}
+
+返却スキーマ:
+{
+  "score": 0,
+  "summary": "...",
+  "novelty": "...",
+  "howToUse": "...",
+  "monetizationIdea": "...",
+  "nextAction": "...",
+  "sources": ["https://..."]
+}`;
+  return normalizeAppraiserVerdict(await runAppraiserJsonTask({
+    cfg,
+    prompt,
+    timeoutSec,
+    maxTokens: 1700,
+    useResearch: true,
+  }));
+}
+
+function appraiserBuildReportBody(item, report) {
+  const lines = [
+    `# ${report.summary || item.title || item.url}`,
+    '',
+    '## 対象',
+    `- URL: ${item.url}`,
+    item.note ? `- メモ: ${item.note}` : '',
+    item.tweetText ? `- 受信テキスト: ${item.tweetText}` : '',
+    '',
+    '## 要約',
+    report.summary || '要約なし',
+    '',
+    '## 新規性',
+    report.novelty || '特記事項なし',
+    '',
+    '## 活用案',
+    report.howToUse || '特記事項なし',
+    '',
+    report.monetizationIdea ? '## 収益化アイデア' : '',
+    report.monetizationIdea || '',
+    '',
+    report.testResult ? '## 実地検証' : '',
+    report.testResult ? `- 状態: ${report.testResult.status || 'n/a'}\n- 要約: ${report.testResult.summary || ''}\n\n${report.testResult.output ? `\`\`\`\n${report.testResult.output}\n\`\`\`` : ''}` : '',
+    '',
+    '## 次の一手',
+    report.nextAction || '継続ウォッチ',
+    '',
+    report.sources && report.sources.length ? '## 参照' : '',
+    report.sources && report.sources.length ? report.sources.map((src) => `- ${src}`).join('\n') : '',
+  ];
+  return lines.filter((line, index, arr) => !(line === '' && arr[index - 1] === '')).join('\n').trim();
+}
+
+function appraiserHandsOnPrompt(repoUrl) {
+  return `このリポジトリを README に従って最小構成でセットアップし、スモークテストを1つだけ実行してください。
+
+要件:
+- まず README と主要ファイルを読み、最短の再現手順を選ぶ
+- GPU必須・大容量ダウンロード必須・外部APIキー必須なら中止して理由を書く
+- 破壊的変更はしない
+- 最終回答は日本語で、以下の JSON のみ返す
+{"status":"passed|skipped|failed","summary":"...","output":"実行ログ要約"}
+
+対象リポジトリ: ${repoUrl}`;
+}
+
+async function runAppraiserHandsOn(item, repo, config, provider) {
+  if (!config.handsOn) return null;
+  if (!repo) return null;
+  if (!provider.cli) {
+    return {
+      status: 'skipped',
+      summary: 'Claude CLI が見つからないため実地検証をスキップしました。',
+      output: '',
+      repoUrl: repo.webUrl,
+    };
+  }
+  const labRoot = path.join(os.tmpdir(), 'appraiser-lab');
+  const workDir = path.join(labRoot, item.id);
+  ensureDir(labRoot);
+  fs.rmSync(workDir, { recursive: true, force: true });
+  try {
+    await runSpawn('git', ['clone', '--depth', '1', repo.cloneUrl, workDir], { cwd: labRoot, timeoutMs: 180000 });
+    const raw = await new Promise((resolve, reject) => {
+      const args = [
+        '-p', appraiserHandsOnPrompt(repo.webUrl),
+        '--model', provider.model,
+        '--output-format', 'json',
+        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      ];
+      let child;
+      try { child = spawn(provider.cli, args, { env: process.env, cwd: workDir }); }
+      catch (error) { reject(new Error('起動失敗: ' + error.message)); return; }
+      let out = ''; let err = ''; let settled = false;
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        if (!settled) {
+          settled = true;
+          reject(new Error(`タイムアウト(${config.testTimeoutSec}秒)`));
+        }
+      }, config.testTimeoutSec * 1000);
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { err += d; });
+      child.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error('起動失敗: ' + error.message));
+      });
+      child.on('close', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          const json = JSON.parse(out);
+          if (json.is_error) reject(new Error(String(json.result || 'CLI エラー').slice(0, 300)));
+          else resolve(String(json.result || '').trim());
+        } catch {
+          reject(new Error((err || out || '応答なし').slice(0, 300)));
+        }
+      });
+    });
+    const parsed = appraiserParseJson(raw);
+    return {
+      status: typeof parsed.status === 'string' ? parsed.status.slice(0, 40) : 'failed',
+      summary: typeof parsed.summary === 'string' ? parsed.summary.slice(0, 4000) : '',
+      output: typeof parsed.output === 'string' ? parsed.output.slice(0, 12000) : '',
+      repoUrl: repo.webUrl,
+    };
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+function appraiserMerchantSourceKey(item) {
+  return `appraiser:${item.id}`;
+}
+
+function maybeQueueHustlerFromAppraiser(item, verdict) {
+  if (!item || !verdict) return null;
+  if (!(item.classification && item.classification.category === 'money' && verdict.score >= 70)) return null;
+  const jobs = loadHustlerJobs();
+  const sourceKey = appraiserMerchantSourceKey(item);
+  const existing = jobs.find((job) => job.type === 'idea_research' && job.source === sourceKey);
+  if (existing) return { queued: false, job: existing };
+  return enqueueHustlerJob({
+    type: 'idea_research',
+    topic: verdict.monetizationIdea || item.title || item.url,
+  }, {
+    source: sourceKey,
+    note: '鑑定士の高評価 money レポートから自動追加',
+  });
+}
+
+function appraiserXStatusFromConfig(config, state) {
+  const xApi = config.xApi || DEFAULT_APPRAISER_CONFIG.xApi;
+  const configured = !!(xApi.bearerToken && xApi.userId && (xApi.pollBookmarks || xApi.pollLikes));
+  return {
+    configured,
+    pollBookmarks: !!xApi.pollBookmarks,
+    pollLikes: !!xApi.pollLikes,
+    intervalHours: xApi.intervalHours,
+    userId: xApi.userId ? `${String(xApi.userId).slice(0, 6)}…` : '',
+    lastPollAt: state.xPolling.lastPollAt,
+    lastSuccessAt: state.xPolling.lastSuccessAt,
+    lastImported: state.xPolling.lastImported,
+    lastError: state.xPolling.lastError,
+    authError: state.xPolling.authError,
+  };
+}
+
+function getAppraiserRuntimeGuard(nowMs = Date.now(), options = {}) {
+  const manual = !!options.manual;
+  const provider = loadHustlerProviderConfig();
+  const hustlerConfig = loadHustlerConfig();
+  const window5h = getWindow5hUsageStats();
+  const lastActivityMs = getLatestLocalActivityMs();
+  const idle = !lastActivityMs || (nowMs - lastActivityMs) >= hustlerConfig.idleMinutes * 60 * 1000;
+  const withinBudget = (window5h.totalTokens + HUSTLER_TOKEN_HEADROOM) < hustlerConfig.tokenBudget5h;
+  const blockers = [];
+  if (provider.mode === 'off') blockers.push('Claude CLI か Anthropic API が未設定です');
+  if (!manual && !idle) blockers.push(`遊休判定(${hustlerConfig.idleMinutes}分)を満たしていません`);
+  if (!manual && !withinBudget) blockers.push('直近5時間トークン予算を超過しています');
+  if (explorerRunning) blockers.push('探検家が実行中です');
+  if (hustlerRunning) blockers.push('商人が実行中です');
+  if (creatorRunning) blockers.push('動画職人が実行中です');
+  if (traderRunning) blockers.push('トレーダーが実行中です');
+  if (appraiserRunning) blockers.push('鑑定士が実行中です');
+  return {
+    mode: provider.mode,
+    model: provider.model,
+    cli: provider.cli,
+    apiKey: provider.apiKey,
+    idle,
+    idleMinutes: hustlerConfig.idleMinutes,
+    tokenBudget5h: hustlerConfig.tokenBudget5h,
+    window5h,
+    withinBudget,
+    blockers,
+    canRun: !blockers.length,
+    manual,
+  };
+}
+
+function getAppraiserStatus(options = {}) {
+  const config = options.config || loadAppraiserConfig();
+  const state = options.state || loadAppraiserState();
+  const items = options.items || loadAppraiserItems();
+  const runtime = options.runtime || getAppraiserRuntimeGuard(Date.now(), { manual: false });
+  const counts = {
+    total: items.length,
+    pending: items.filter((item) => item.status === 'pending').length,
+    classifying: items.filter((item) => item.status === 'classifying').length,
+    researching: items.filter((item) => item.status === 'researching').length,
+    testing: items.filter((item) => item.status === 'testing').length,
+    done: items.filter((item) => item.status === 'done').length,
+    error: items.filter((item) => item.status === 'error').length,
+  };
+  const lastRun = items
+    .map((item) => item.finishedAt || item.startedAt || '')
+    .filter(Boolean)
+    .sort()
+    .pop() || null;
+  return {
+    config,
+    running: appraiserRunning,
+    runningItemId: appraiserRunningItemId,
+    queue: counts,
+    lastRun,
+    runtime: {
+      mode: runtime.mode,
+      idle: runtime.idle,
+      idleMinutes: runtime.idleMinutes,
+      tokenBudget5h: runtime.tokenBudget5h,
+      window5h: runtime.window5h,
+      withinBudget: runtime.withinBudget,
+      canRun: runtime.canRun && counts.pending > 0,
+      blockers: runtime.blockers,
+    },
+    xStatus: appraiserXStatusFromConfig(config, state),
+  };
+}
+
+async function appraiserCreateInboxItem(input, options = {}) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const url = typeof src.url === 'string' ? src.url.trim().slice(0, 2000) : '';
+  if (!/^https?:\/\//i.test(url)) throw new Error('url は http(s) URL を指定してください');
+  const note = typeof src.note === 'string' ? src.note.trim().slice(0, 4000) : '';
+  let tweetText = typeof src.tweetText === 'string' ? src.tweetText.trim().slice(0, 12000) : '';
+  let title = typeof src.title === 'string' ? src.title.trim().slice(0, 300) : '';
+  const links = uniqStrings(src.links, 20, 2000);
+  if (appraiserIsXPostUrl(url) && !tweetText) {
+    try {
+      const oembed = await appraiserFetchTwitterOembed(url, options.fetchImpl || fetch);
+      tweetText = oembed.tweetText || tweetText;
+      title = oembed.title || title;
+    } catch { /* 失敗しても URL のみで進める */ }
+  }
+  const item = normalizeAppraiserItem({
+    id: typeof src.id === 'string' ? src.id : makeId('app'),
+    url,
+    note,
+    title: title || appraiserTitleFromText(tweetText, url),
+    tweetId: typeof src.tweetId === 'string' ? src.tweetId : '',
+    tweetText,
+    links: uniqStrings([...links, ...appraiserExtractLinksFromText(tweetText), ...appraiserExtractLinksFromText(note)], 20, 2000),
+    source: typeof src.source === 'string' ? src.source : 'manual',
+    status: 'pending',
+    createdAt: typeof src.createdAt === 'string' ? src.createdAt : new Date().toISOString(),
+    updatedAt: typeof src.updatedAt === 'string' ? src.updatedAt : new Date().toISOString(),
+  });
+  const items = loadAppraiserItems();
+  items.push(item);
+  saveAppraiserItems(items);
+  return item;
+}
+
+async function appraiserFetchXTimeline(kind, config, seenSet, fetchImpl = fetch) {
+  const pathName = kind === 'likes' ? 'liked_tweets' : 'bookmarks';
+  const isInitial = seenSet.size === 0;
+  const limit = isInitial ? 20 : 50;
+  const imported = [];
+  const headers = {
+    Authorization: `Bearer ${config.xApi.bearerToken}`,
+    Accept: 'application/json',
+  };
+  let nextToken = null;
+  let hitKnown = false;
+  do {
+    const params = new URLSearchParams({
+      'tweet.fields': 'text,entities,created_at',
+      expansions: 'author_id',
+      'user.fields': 'username,name',
+      max_results: String(Math.min(50, limit - imported.length)),
+    });
+    if (nextToken) params.set('pagination_token', nextToken);
+    const res = await fetchImpl(`https://api.x.com/2/users/${encodeURIComponent(config.xApi.userId)}/${pathName}?${params}`, { headers });
+    if (res.status === 401) {
+      const err = new Error('X API 401: bearerToken が無効か期限切れです');
+      err.status = 401;
+      throw err;
+    }
+    if (!res.ok) throw new Error(`X API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const json = await res.json();
+    const users = new Map(((json.includes && json.includes.users) || []).map((user) => [String(user.id), user]));
+    for (const tweet of Array.isArray(json.data) ? json.data : []) {
+      const id = String(tweet.id || '');
+      if (!id) continue;
+      if (seenSet.has(id)) {
+        hitKnown = true;
+        break;
+      }
+      const user = users.get(String(tweet.author_id || ''));
+      const links = [];
+      for (const entry of (((tweet.entities || {}).urls) || [])) {
+        const expanded = entry && (entry.unwound_url || entry.expanded_url || entry.url);
+        if (expanded) links.push(String(expanded));
+      }
+      for (const entry of appraiserExtractLinksFromText(tweet.text)) links.push(entry);
+      imported.push({
+        tweetId: id,
+        url: `https://x.com/${user && user.username ? user.username : 'i/web'}/status/${id}`,
+        title: appraiserTitleFromText(tweet.text, id),
+        tweetText: typeof tweet.text === 'string' ? tweet.text : '',
+        links: uniqStrings(links, 20, 2000),
+        note: kind === 'likes' ? 'X API likes' : 'X API bookmarks',
+        source: kind === 'likes' ? 'x-likes' : 'x-bookmarks',
+        createdAt: typeof tweet.created_at === 'string' ? tweet.created_at : new Date().toISOString(),
+      });
+      if (imported.length >= limit) break;
+    }
+    nextToken = json.meta && json.meta.next_token ? String(json.meta.next_token) : null;
+  } while (!isInitial && nextToken && !hitKnown && imported.length < limit);
+  return imported;
+}
+
+async function maybePollAppraiserX(options = {}) {
+  const config = options.config || loadAppraiserConfig();
+  const state = options.state || loadAppraiserState();
+  const xApi = config.xApi;
+  if (!(xApi.bearerToken && xApi.userId && (xApi.pollBookmarks || xApi.pollLikes))) return { ok: true, imported: { bookmarks: 0, likes: 0 }, skipped: 'not-configured' };
+  if (state.xPolling.authError) return { ok: false, imported: { bookmarks: 0, likes: 0 }, skipped: 'auth-error' };
+  const lastPollMs = state.xPolling.lastPollAt ? Date.parse(state.xPolling.lastPollAt) : 0;
+  const intervalMs = xApi.intervalHours * 60 * 60 * 1000;
+  if (!options.force && lastPollMs && (Date.now() - lastPollMs) < intervalMs) {
+    return { ok: true, imported: { bookmarks: 0, likes: 0 }, skipped: 'interval' };
+  }
+  const seen = loadAppraiserSeen();
+  const nextSeen = { ...seen };
+  const importedCounts = { bookmarks: 0, likes: 0 };
+  try {
+    for (const kind of ['bookmarks', 'likes']) {
+      if (kind === 'bookmarks' && !xApi.pollBookmarks) continue;
+      if (kind === 'likes' && !xApi.pollLikes) continue;
+      const feed = await appraiserFetchXTimeline(kind, config, new Set(seen[kind] || []), options.fetchImpl || fetch);
+      for (const tweet of feed) {
+        await appraiserCreateInboxItem(tweet, { fetchImpl: options.fetchImpl || fetch });
+      }
+      importedCounts[kind] = feed.length;
+      nextSeen[kind] = uniqStrings([...(feed.map((tweet) => tweet.tweetId)), ...(seen[kind] || [])], 5000, 80);
+    }
+    saveAppraiserSeen(nextSeen);
+    saveAppraiserState({
+      xPolling: {
+        lastPollAt: new Date().toISOString(),
+        lastSuccessAt: new Date().toISOString(),
+        lastImported: importedCounts,
+        lastError: '',
+        authError: null,
+      },
+    });
+    return { ok: true, imported: importedCounts };
+  } catch (error) {
+    saveAppraiserState({
+      xPolling: {
+        lastPollAt: new Date().toISOString(),
+        lastSuccessAt: state.xPolling.lastSuccessAt,
+        lastImported: importedCounts,
+        lastError: String(error.message || error).slice(0, 500),
+        authError: error.status === 401 ? {
+          at: new Date().toISOString(),
+          message: String(error.message || error).slice(0, 400),
+          status: 401,
+        } : state.xPolling.authError,
+      },
+    });
+    throw error;
+  }
+}
+
+async function executeAppraiserItem(itemId, options = {}) {
+  if (appraiserRunning) throw new Error('別の鑑定ジョブを実行中です');
+  const runtime = options.runtime || getAppraiserRuntimeGuard(Date.now(), { manual: !!options.manual });
+  if (!runtime.canRun) throw new Error(runtime.blockers[0] || '鑑定を実行できません');
+  const config = loadAppraiserConfig();
+  const provider = loadHustlerProviderConfig();
+  const items = loadAppraiserItems();
+  const target = items.find((item) => item.id === itemId);
+  if (!target) throw new Error('アイテムが見つかりません');
+  const timeoutSec = loadHustlerConfig().cliTimeoutSec;
+  appraiserRunning = true;
+  appraiserRunningItemId = itemId;
+  let item = updateAppraiserItemById(itemId, (current) => ({
+    ...current,
+    status: 'classifying',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+  })) || target;
+  try {
+    const classification = await classifyAppraiserItem(item, provider, config, timeoutSec);
+    item = updateAppraiserItemById(itemId, (current) => ({
+      ...current,
+      classification,
+      status: classification && classification.relevance >= 40 ? 'researching' : 'done',
+      title: current.title || appraiserTitleFromText(current.tweetText, current.url),
+    })) || item;
+
+    let contexts = [];
+    let verdict = normalizeAppraiserVerdict({
+      score: classification ? Math.round(classification.relevance * 0.6) : 0,
+      summary: classification && classification.reason ? classification.reason : '関連性が低いため軽量判定で完了しました。',
+      novelty: classification && classification.relevance < 40 ? '関連性が低く、詳細調査は見送りました。' : '',
+      howToUse: classification && classification.relevance < 40 ? '必要になったら URL を再確認してください。' : '',
+      monetizationIdea: '',
+      nextAction: classification && classification.relevance < 40 ? '保留' : '',
+      sources: uniqStrings([item.url, ...appraiserCollectItemLinks(item)], 20, 2000),
+    });
+
+    if (classification && classification.relevance >= 40) {
+      for (const link of appraiserCollectItemLinks(item).slice(0, 4)) {
+        try { contexts.push(await appraiserFetchLinkContext(link, options.fetchImpl || fetch)); }
+        catch (error) {
+          contexts.push({
+            kind: 'error',
+            url: link,
+            title: link,
+            text: `取得失敗: ${String(error.message || error).slice(0, 300)}`,
+            metadata: {},
+          });
+        }
+      }
+      if (!contexts.length) {
+        contexts.push({
+          kind: 'inline',
+          url: item.url,
+          title: item.title || item.url,
+          text: [item.note, item.tweetText].filter(Boolean).join('\n').slice(0, 10000),
+          metadata: {},
+        });
+      }
+      verdict = appraiserResearchVerdict(item, provider, config, contexts, timeoutSec);
+      verdict = normalizeAppraiserVerdict(await verdict);
+      const repo = appraiserRepoFromItem(item);
+      if (repo && config.handsOn) {
+        item = updateAppraiserItemById(itemId, (current) => ({ ...current, status: 'testing' })) || item;
+        verdict.testResult = await runAppraiserHandsOn(item, repo, config, provider);
+      }
+    }
+
+    const merchant = maybeQueueHustlerFromAppraiser(item, verdict);
+    if (merchant && merchant.job) {
+      verdict.merchantQueued = merchant.queued !== false;
+      verdict.merchantJobId = merchant.job.id;
+    }
+    const reportMeta = {
+      itemId: item.id,
+      url: item.url,
+      title: item.title || verdict.summary || item.url,
+      category: item.classification ? item.classification.category : 'other',
+      relevance: item.classification ? item.classification.relevance : 0,
+      score: verdict.score,
+      summary: verdict.summary,
+      merchantQueued: !!verdict.merchantQueued,
+      merchantJobId: verdict.merchantJobId || null,
+      createdAt: item.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    saveAppraiserReport(item.id, reportMeta, appraiserBuildReportBody(item, verdict));
+    item = updateAppraiserItemById(itemId, (current) => ({
+      ...current,
+      status: 'done',
+      verdict,
+      reportId: item.id,
+      finishedAt: new Date().toISOString(),
+      error: null,
+    })) || item;
+    return item;
+  } catch (error) {
+    updateAppraiserItemById(itemId, (current) => ({
+      ...current,
+      status: 'error',
+      finishedAt: new Date().toISOString(),
+      error: String(error.message || error).slice(0, 500),
+    }));
+    throw error;
+  } finally {
+    appraiserRunning = false;
+    appraiserRunningItemId = null;
+  }
+}
+
+async function maybeRunAppraiserScheduled() {
+  const config = loadAppraiserConfig();
+  try { await maybePollAppraiserX({ config }); } catch (error) { console.error('[appraiser] X polling 失敗:', error.message); }
+  const status = getAppraiserStatus({ config });
+  if (!status.runtime.canRun) return null;
+  const target = loadAppraiserItems()
+    .filter((item) => item.status === 'pending')
+    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))[0];
+  if (!target) return null;
+  console.log(`[appraiser] 定期実行を開始: ${target.id} ${target.url}`);
+  return executeAppraiserItem(target.id, { runtime: getAppraiserRuntimeGuard(Date.now(), { manual: false }) });
+}
+
 function researchPrompt(topic) {
   return `あなたは「${topic}」分野を追う調査担当です。Web 検索を複数回おこない、直近1〜2週間の最新情報を十分に調べたうえで、日本語の Markdown レポートにまとめてください。
 
@@ -5381,6 +6464,103 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  /* ── 鑑定士──────────────────────────── */
+  if (url.pathname === '/api/appraiser/status') {
+    sendJson(res, 200, getAppraiserStatus());
+    return;
+  }
+
+  if (url.pathname === '/api/appraiser/config') {
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const config = saveAppraiserConfig(body || {});
+          sendJson(res, 200, { ok: true, config, status: getAppraiserStatus({ config }) });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/appraiser/inbox') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const item = await appraiserCreateInboxItem(body || {});
+        sendJson(res, 200, { ok: true, item });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/appraiser/items') {
+    const items = loadAppraiserItems().sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+    sendJson(res, 200, { items });
+    return;
+  }
+
+  if (req.method === 'DELETE' && /^\/api\/appraiser\/items\/[^/]+$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const items = loadAppraiserItems();
+    const idx = items.findIndex((item) => item.id === id);
+    if (idx < 0) { sendJson(res, 404, { error: 'アイテムが見つかりません' }); return; }
+    if (appraiserRunning && appraiserRunningItemId === id) { sendJson(res, 409, { error: '実行中アイテムは削除できません' }); return; }
+    const removed = items.splice(idx, 1)[0];
+    saveAppraiserItems(items);
+    const reportPath = appraiserReportPath(id);
+    if (fs.existsSync(reportPath)) fs.rmSync(reportPath, { force: true });
+    sendJson(res, 200, { ok: true, item: removed });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/appraiser/run') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const items = loadAppraiserItems();
+        const target = body && body.id
+          ? items.find((item) => item.id === String(body.id))
+          : items.filter((item) => item.status === 'pending').sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))[0];
+        if (!target) throw new Error('実行できるアイテムがありません');
+        const runtime = getAppraiserRuntimeGuard(Date.now(), { manual: true });
+        sendJson(res, 200, { ok: true, item: await executeAppraiserItem(target.id, { manual: true, runtime }) });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/appraiser/reports') {
+    sendJson(res, 200, { reports: listAppraiserReports() });
+    return;
+  }
+
+  if (req.method === 'GET' && /^\/api\/appraiser\/reports\/[^/]+$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const report = readAppraiserReport(id);
+    if (!report) { sendJson(res, 404, { error: 'レポートが見つかりません' }); return; }
+    sendJson(res, 200, report);
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/appraiser/add') {
+    Promise.resolve()
+      .then(async () => {
+        const rawUrl = url.searchParams.get('url') || '';
+        const note = url.searchParams.get('note') || '';
+        if (!rawUrl.trim()) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end('<!doctype html><meta charset="utf-8"><title>鑑定士</title><body style="font-family:sans-serif;padding:24px"><h1>URL が必要です</h1><p><code>?url=https://...</code> を付けて呼び出してください。</p></body>');
+          return;
+        }
+        const item = await appraiserCreateInboxItem({ url: rawUrl, note, source: 'share-sheet' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(`<!doctype html><meta charset="utf-8"><title>鑑定士</title><body style="font-family:sans-serif;padding:24px;line-height:1.6"><h1>受信しました</h1><p>鑑定士の受信箱に追加しました。</p><p><b>ID:</b> ${escapeHtml(item.id)}</p><p><a href="/">ダッシュボードへ戻る</a></p></body>`);
+      })
+      .catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(`<!doctype html><meta charset="utf-8"><title>鑑定士</title><body style="font-family:sans-serif;padding:24px"><h1>追加に失敗しました</h1><pre>${escapeHtml(String(e.message || e))}</pre></body>`);
+      });
+    return;
+  }
+
   /* ── 商人(内職)──────────────────────────── */
   if (url.pathname === '/api/hustler/status') {
     sendJson(res, 200, getHustlerStatus());
@@ -5770,6 +6950,7 @@ const server = http.createServer((req, res) => {
 ensureHustlerStorage();
 ensureCreatorStorage();
 ensureTraderStorage();
+ensureAppraiserStorage();
 resetStaleHustlerJobs();
 queueRetryableHustlerErrors();
 resetStaleCreatorJobs();
@@ -5810,6 +6991,10 @@ function startServer() {
   const runTrader = () => maybeRunTraderScheduled().catch((e) => console.error('[trader] 定期実行エラー:', e.message));
   runTrader();
   setInterval(runTrader, HUSTLER_CHECK_MS);
+
+  const runAppraiser = () => maybeRunAppraiserScheduled().catch((e) => console.error('[appraiser] 定期実行エラー:', e.message));
+  runAppraiser();
+  setInterval(runAppraiser, HUSTLER_CHECK_MS);
 }
 
 if (require.main === module) startServer();
@@ -5854,6 +7039,17 @@ module.exports = {
   enqueueCreatorJob,
   retryHustlerOutput,
   publishHustlerOutput,
+  loadAppraiserConfig,
+  saveAppraiserConfig,
+  loadAppraiserItems,
+  saveAppraiserItems,
+  getAppraiserStatus,
+  executeAppraiserItem,
+  maybeRunAppraiserScheduled,
+  maybePollAppraiserX,
+  appraiserCreateInboxItem,
+  listAppraiserReports,
+  readAppraiserReport,
   doResearch,
   checkWeekly,
   enqueueHustlerJob,
@@ -5886,6 +7082,9 @@ module.exports = {
     traderLatestPricesMap,
     computeTraderEquity,
     parseTraderAnalysis,
+    appraiserFetchXTimeline,
+    appraiserParseGithubRepo,
+    normalizeAppraiserItem,
     fetchTraderPricesFromCoinGecko,
     fetchTraderPricesFromApi,
     fetchTraderPricesFromYahoo,

@@ -890,6 +890,22 @@
     <div class="xbody" id="x-body"></div>
   </div>
 
+  <div class="panel hpanel" id="apanel">
+    <div class="panel-resize" id="a-resize"></div>
+    <div class="panel-head">
+      <button class="close" onclick="closeAPanel()">✕</button>
+      <div class="pj">鑑定士</div>
+      <div class="pth" id="a-sub">X のネタを取り込んで検証</div>
+      <div class="badges" id="a-badges"></div>
+    </div>
+    <div class="htabs">
+      <button class="htab active" id="a-tab-inbox" onclick="setATab('inbox')">受信箱</button>
+      <button class="htab" id="a-tab-reports" onclick="setATab('reports')">鑑定結果</button>
+      <button class="htab" id="a-tab-settings" onclick="setATab('settings')">設定</button>
+    </div>
+    <div class="hbody" id="a-body"></div>
+  </div>
+
   <div class="panel hpanel" id="hpanel">
     <div class="panel-resize" id="h-resize"></div>
     <div class="panel-head">
@@ -985,6 +1001,15 @@ let cBusy = false;
 let cTab = 'work';
 let cCurrentVideoId = null;
 let cPollAt = 0;
+let ASTATUS = null;
+let AITEMS = [];
+let AREPORTS = [];
+let aUnread = false;
+let aBusy = false;
+let aTab = 'inbox';
+let aCurrentReportId = null;
+let aReportCache = {};
+let aPollAt = 0;
 let TSTATUS = null;
 let THISTORY = { equityHistory: [], trades: [], lastAnalysis: null };
 let tBusy = false;
@@ -1111,6 +1136,7 @@ const ZONE_META = {
 const STATIONS = {
   secretary: { island: 'main', u: .14, v: .10 },
   explorer: { island: 'auto', u: .76, v: .16 },
+  appraiser: { island: 'auto', u: .56, v: .22 },
   trader: { island: 'auto', u: .74, v: .52 },
   creator: { island: 'auto', u: .60, v: .82 },
   hustler: { island: 'auto', u: .80, v: .82 },
@@ -1539,6 +1565,18 @@ function catAccessoryNodes(accessory, coat, pose, part = 'head') {
       parts.push(el('path', { d: `M-6.5,${y - 4} C-3.2,${y - 1.5} 3.4,${y - 1.5} 6.8,${y - 4}`, stroke: '#2b2b2b', 'stroke-width': 1.2, fill: 'none', opacity: .9 }));
       parts.push(el('rect', { x: -4.9, y: y - 1.4, width: 9.8, height: 7.2, rx: 1.8, fill: '#24292f', stroke: '#0f1113', 'stroke-width': .8 }));
       parts.push(el('circle', { cx: 0, cy: y + 2.1, r: 1.7, fill: '#5bc7e6', opacity: .95 }));
+    } else if (acc === 'appraiser' && part === 'head') {
+      const g = el('g');
+      g.appendChild(el('circle', { cx: 3.7, cy: 1.2, r: 3.2, fill: 'none', stroke: '#5a5a64', 'stroke-width': 1 }));
+      g.appendChild(el('path', { d: 'M.8,1.2 C1.4,.7 2.2,.7 2.8,1.2', stroke: '#5a5a64', 'stroke-width': .8, 'stroke-linecap': 'round', fill: 'none' }));
+      g.appendChild(el('path', { d: 'M6.6,2.8 C7.7,4.9 8.1,7.2 7.9,10.3', stroke: '#5a5a64', 'stroke-width': .75, 'stroke-linecap': 'round', fill: 'none', opacity: .78 }));
+      parts.push(g);
+    } else if (acc === 'appraiser' && part === 'body') {
+      const y = pose === 'walk' ? -14.4 : -18.4;
+      parts.push(el('path', { d: `M-4.6,${y} C-1.4,${(y + 1.4).toFixed(1)} 1.4,${(y + 1.4).toFixed(1)} 4.6,${y}`, stroke: '#5a5a64', 'stroke-width': .95, fill: 'none' }));
+      parts.push(el('path', { d: `M2.8,${(y + 2.2).toFixed(1)} C5.8,${(y + 3.4).toFixed(1)} 8.1,${(y + 6.4).toFixed(1)} 9.1,${(y + 9.2).toFixed(1)}`, stroke: '#5a5a64', 'stroke-width': .95, fill: 'none', 'stroke-linecap': 'round' }));
+      parts.push(el('circle', { cx: 10.3, cy: y + 10.8, r: 3.5, fill: 'none', stroke: '#5a5a64', 'stroke-width': 1 }));
+      parts.push(el('path', { d: `M12.6,${(y + 13.1).toFixed(1)} l3.6,3.6`, stroke: '#5a5a64', 'stroke-width': 1.2, 'stroke-linecap': 'round', fill: 'none' }));
     } else if (acc === 'merchant' && part === 'sleep-side') {
       parts.push(el('path', { d: 'M13.6,-15.8 C16.5,-16.3 19.1,-14.9 20.2,-12.2 C18.6,-9.8 15.6,-8.8 12.8,-9.8 C11.8,-11.6 12.1,-14.5 13.6,-15.8 Z', fill: '#bc8341', stroke: '#96611f', 'stroke-width': .8, opacity: .97 }));
       parts.push(el('ellipse', { cx: 20.3, cy: -12.4, rx: 2.5, ry: 1.8, fill: '#f0c55a', stroke: '#9f7b26', 'stroke-width': .8 }));
@@ -1549,7 +1587,7 @@ function catAccessoryNodes(accessory, coat, pose, part = 'head') {
 
 /* 猫(足元が原点)。pose: 'stand' | 'work' | 'walk' | 'sleep' | 'present' */
 function appendCatBodyAccessory(parent, accessory, pose) {
-  if (!hasCatAccessory(accessory, 'merchant') && !hasCatAccessory(accessory, 'trader') && !hasCatAccessory(accessory, 'creator')) return;
+  if (!hasCatAccessory(accessory, 'merchant') && !hasCatAccessory(accessory, 'trader') && !hasCatAccessory(accessory, 'creator') && !hasCatAccessory(accessory, 'appraiser')) return;
   const g = el('g');
   if (hasCatAccessory(accessory, 'merchant') && pose === 'sleep') {
     for (const n of catAccessoryNodes('merchant', null, pose, 'sleep-side')) g.appendChild(n);
@@ -1570,6 +1608,9 @@ function appendCatBodyAccessory(parent, accessory, pose) {
   }
   if (hasCatAccessory(accessory, 'creator') && pose !== 'sleep') {
     for (const n of catAccessoryNodes('creator', null, pose, 'body')) g.appendChild(n);
+  }
+  if (hasCatAccessory(accessory, 'appraiser') && pose !== 'sleep') {
+    for (const n of catAccessoryNodes('appraiser', null, pose, 'body')) g.appendChild(n);
   }
   parent.appendChild(g);
 }
@@ -2144,6 +2185,51 @@ function explorerStation(unread) {
   return g;
 }
 
+function appraiserStation(unread) {
+  const g = el('g', { class: 'node-g' });
+  g.appendChild(el('path', { d: tilePath(72, 36), fill: '#f2efe7', stroke: '#fff', 'stroke-width': 2.5 }));
+  g.appendChild(el('ellipse', { cx: 0, cy: 0, rx: 64, ry: 32, fill: 'none', stroke: '#b59b63', 'stroke-width': 2.5, class: 'pulse-ring' }));
+
+  const desk = el('g', { transform: 'translate(-24,-2)' });
+  desk.appendChild(isoBox(0, 0, 20, 12, 14, '#f8f3e8', '#d8c29a', '#c4aa78'));
+  desk.appendChild(el('path', { d: 'M-1,-18 l8,-4 l7,3.5 l-8,4 Z', fill: '#efe3c7' }));
+  const glass = el('g', { class: 'bob', transform: 'translate(12,-29)' });
+  glass.appendChild(el('circle', { cx: 0, cy: 0, r: 7.2, fill: 'none', stroke: '#6f6456', 'stroke-width': 2 }));
+  glass.appendChild(el('path', { d: 'M5.4,5.4 l8.2,8.2', stroke: '#6f6456', 'stroke-width': 2.4, 'stroke-linecap': 'round', fill: 'none' }));
+  desk.appendChild(glass);
+  g.appendChild(desk);
+
+  const ap = cat({ pose: 'stand', coat: 'siamese', accessory: 'appraiser', anim: 'bob', seed: 'appraiser' });
+  ap.setAttribute('transform', 'translate(18,-6) scale(1.08)');
+  g.appendChild(ap);
+
+  const bub = el('g', { class: 'bob', transform: 'translate(30,-84)' });
+  bub.appendChild(el('rect', { x: -17, y: -16, width: 34, height: 27, rx: 10, fill: '#fff', stroke: '#b59b63', 'stroke-width': 2, filter: 'url(#soft)' }));
+  bub.appendChild(el('path', { d: 'M-7,9 l7,9 l7,-9 Z', fill: '#fff' }));
+  const bt = el('text', { x: 0, y: 3, 'text-anchor': 'middle', 'font-size': 15 });
+  txt(bt, '🧐'); bub.appendChild(bt);
+  g.appendChild(bub);
+
+  if (unread) {
+    const bd = el('g', { transform: 'translate(46,-90)' });
+    bd.appendChild(el('circle', { cx: 0, cy: 0, r: 9, fill: '#e5484d', stroke: '#fff', 'stroke-width': 2, class: 'blink' }));
+    const bx = el('text', { x: 0, y: 4, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12, 'font-weight': 800 });
+    txt(bx, '!'); bd.appendChild(bx);
+    g.appendChild(bd);
+  }
+
+  const plate = el('g', { transform: 'translate(0,50)' });
+  plate.appendChild(el('rect', { x: -58, y: -14, width: 116, height: 31, rx: 9, fill: '#6f5630', filter: 'url(#soft)' }));
+  const t1 = el('text', { x: 0, y: -1, 'text-anchor': 'middle', fill: '#fff', 'font-size': 12.5, 'font-weight': 700 });
+  txt(t1, '鑑定士');
+  const t2 = el('text', { x: 0, y: 12, 'text-anchor': 'middle', fill: '#ecdcb8', 'font-size': 9.5 });
+  txt(t2, 'クリックで検証 🧐');
+  plate.appendChild(t1); plate.appendChild(t2);
+  g.appendChild(plate);
+
+  return g;
+}
+
 /* 商人(内職)。unread=true で新着成果物バッジ */
 function hustlerStation(unread) {
   const g = el('g', { class: 'node-g' });
@@ -2672,6 +2758,7 @@ function updateAmbientScene(scene) {
   const obstacles = [
     worldObstacle(stationPoint('secretary').x, stationPoint('secretary').y, 78, 62),
     worldObstacle(stationPoint('explorer').x, stationPoint('explorer').y, 74, 60),
+    worldObstacle(stationPoint('appraiser').x, stationPoint('appraiser').y, 74, 60),
     worldObstacle(stationPoint('trader').x, stationPoint('trader').y, 74, 60),
     worldObstacle(stationPoint('creator').x, stationPoint('creator').y, 74, 60),
     worldObstacle(stationPoint('hustler').x, stationPoint('hustler').y, 74, 60),
@@ -2763,7 +2850,7 @@ function render() {
   {
     const autoHub = isoOn(FLOOR_LAYOUT.auto, .60, .48);
     const autoLinkLayer = el('g', { opacity: .4 });
-    for (const name of ['explorer', 'trader', 'creator', 'hustler']) {
+    for (const name of ['explorer', 'appraiser', 'trader', 'creator', 'hustler']) {
       const pt = stationPoint(name);
       const mx = (pt.x + autoHub.x) / 2;
       const my = (pt.y + autoHub.y) / 2 - 12;
@@ -2856,6 +2943,15 @@ function render() {
     items.push({ y: pt.y + 1e4, el: g });
   }
 
+  // 鑑定士(常に最前面・クリックで検証パネル)
+  {
+    const pt = stationPoint('appraiser');
+    const g = appraiserStation(aUnread);
+    g.setAttribute('transform', 'translate(' + pt.x + ',' + pt.y + ')');
+    g.addEventListener('pointerdown', openAPanel);
+    items.push({ y: pt.y + 1e4, el: g });
+  }
+
   // 商人(常に最前面・クリックで内職パネル)
   {
     const pt = stationPoint('hustler');
@@ -2937,7 +3033,7 @@ function openPanel(id) {
   selectedId = id;
   const p = (DATA.projects || []).find((x) => (x.id || x.dirName) === id);
   if (!p) return;
-  closeSPanel(); closeXPanel(); closeHPanel(); closeCPanel(); closeTPanel();
+  closeSPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeCPanel(); closeTPanel();
   fillPanel(p);
   loadTmuxPanes(p);
   $('panel').classList.add('open');
@@ -3310,7 +3406,7 @@ async function tick() {
 tick();
 setInterval(tick, 3000);
 window.addEventListener('resize', () => render());
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel(); closeCPanel(); closeTPanel(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeCPanel(); closeTPanel(); } });
 $('range').addEventListener('change', () => { lastRenderKey = null; render(); });
 
 /* ══════════ ミニ表示(Picture-in-Picture)══════════
@@ -3716,7 +3812,7 @@ async function loadXStatus() {
 }
 
 function openXPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeHPanel(); closeCPanel(); closeTPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeAPanel(); closeHPanel(); closeCPanel(); closeTPanel();
   $('xpanel').classList.add('open');
   localStorage.setItem('xSeenAt', String(Date.now())); // 開いたら既読
   if (xUnread) { xUnread = false; forceRerender(); }
@@ -3940,6 +4036,388 @@ function mdToHtml(md) {
 // 起動時に一度だけ状態を取得し、未読バッジを反映
 loadXStatus().then(() => { xUnread = computeUnread(); if (xUnread) forceRerender(); });
 
+/* ══════════ 鑑定士══════════ */
+function aStatusLabel(status) {
+  return {
+    pending: '待機中',
+    classifying: '分類中',
+    researching: '調査中',
+    testing: '実地検証中',
+    done: '完了',
+    error: 'エラー',
+  }[status] || status;
+}
+function aStatusClass(status) {
+  return {
+    classifying: 'warn',
+    researching: 'warn',
+    testing: 'warn',
+    done: 'on',
+    error: 'err',
+  }[status] || '';
+}
+function aCategoryLabel(category) {
+  return {
+    research: '研究',
+    money: '収益',
+    tool: 'ツール',
+    other: 'その他',
+  }[category] || category;
+}
+function aCategoryClass(category) {
+  return {
+    research: 'on',
+    money: 'warn',
+    tool: '',
+    other: '',
+  }[category] || '';
+}
+function aScoreClass(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '';
+  if (n >= 70) return 'score-good';
+  if (n >= 40) return 'score-mid';
+  return 'score-low';
+}
+function aScoreBadge(score, suffix = '点') {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return '';
+  return `<span class="hchip ${aScoreClass(n)}">${Math.round(n)}${suffix}</span>`;
+}
+function computeAUnread() {
+  let newest = 0;
+  for (const report of AREPORTS || []) newest = Math.max(newest, Date.parse(report.updatedAt || report.createdAt || 0) || 0);
+  return newest > Number(localStorage.getItem('aSeenAt') || 0);
+}
+function updateAUnreadFromReports() {
+  const prev = aUnread;
+  aUnread = computeAUnread();
+  if (prev !== aUnread) forceRerender();
+}
+async function loadAppraiserData() {
+  const [status, items, reports] = await Promise.all([
+    hFetchJson('/api/appraiser/status'),
+    hFetchJson('/api/appraiser/items'),
+    hFetchJson('/api/appraiser/reports'),
+  ]);
+  ASTATUS = status;
+  AITEMS = items.items || [];
+  AREPORTS = reports.reports || [];
+  if (aCurrentReportId && !AREPORTS.some((report) => report.id === aCurrentReportId)) aCurrentReportId = null;
+  if (!aCurrentReportId && AREPORTS.length) aCurrentReportId = AREPORTS[0].id;
+  updateAUnreadFromReports();
+}
+function maybePollAppraiser(force) {
+  const now = Date.now();
+  if (!force && now - aPollAt < 15000) return;
+  aPollAt = now;
+  loadAppraiserData()
+    .then(() => { if ($('apanel').classList.contains('open')) renderAPanel(); })
+    .catch(() => { if ($('apanel').classList.contains('open')) renderAPanel(); });
+}
+function renderAHeader() {
+  const sub = $('a-sub');
+  const badges = $('a-badges');
+  if (!ASTATUS) {
+    sub.textContent = '鑑定士の状態を読み込み中';
+    badges.innerHTML = '<span class="badge">読込中</span>';
+    return;
+  }
+  const mode = ASTATUS.runtime && ASTATUS.runtime.mode;
+  const xst = ASTATUS.xStatus || {};
+  let label = mode === 'cli' ? 'Claude CLI で分類/調査' : mode === 'api' ? 'Anthropic API で分類/調査' : '未設定 — CLI か API キーが必要';
+  if (xst.configured) label += ` ・ Xポーリング ${xst.intervalHours}h`;
+  else label += ' ・ 手動受信中心';
+  sub.textContent = label;
+  badges.innerHTML = `
+    <span class="badge ${ASTATUS.runtime && ASTATUS.runtime.idle ? 'on' : ''}">${ASTATUS.runtime && ASTATUS.runtime.idle ? '遊休中' : '使用中'}</span>
+    <span class="badge ${ASTATUS.runtime && ASTATUS.runtime.canRun ? 'on' : ''}">${ASTATUS.runtime && ASTATUS.runtime.canRun ? '検証可能' : '条件待ち'}</span>
+    <span class="badge">${(ASTATUS.queue && ASTATUS.queue.pending) || 0} 件待機</span>
+    <span class="badge ${ASTATUS.running ? 'on' : ''}">${ASTATUS.running ? '実行中' : '待機中'}</span>`;
+}
+function setATab(tab) {
+  aTab = tab;
+  renderAPanel();
+}
+function openAPanel() {
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel(); closeCPanel(); closeTPanel();
+  $('apanel').classList.add('open');
+  localStorage.setItem('aSeenAt', String(Date.now()));
+  if (aUnread) { aUnread = false; forceRerender(); }
+  renderAPanel();
+  maybePollAppraiser(true);
+}
+function closeAPanel() { $('apanel').classList.remove('open'); }
+function renderATabs() {
+  for (const tab of ['inbox', 'reports', 'settings']) $('a-tab-' + tab).classList.toggle('active', aTab === tab);
+}
+function aItemSummary(item) {
+  return item.title || item.note || item.url || '無題';
+}
+function aQueueList(items) {
+  if (!items.length) return '<div class="empty">受信アイテムはまだありません</div>';
+  return items.map((item) => `
+    <div class="hjob">
+      <div class="top">
+        <div>
+          <div class="ttl">${esc(aItemSummary(item))}</div>
+          <div class="sub">${esc(item.url)}${item.note ? ' ・ ' + esc(item.note.slice(0, 80)) : ''}${item.error ? ' ・ ' + esc(item.error) : ''}</div>
+        </div>
+        <div class="hrow" style="margin-top:0;justify-content:flex-end">
+          ${item.classification ? `<span class="hchip ${aCategoryClass(item.classification.category)}">${esc(aCategoryLabel(item.classification.category))}</span>` : ''}
+          ${item.classification ? aScoreBadge(item.classification.relevance, '%') : ''}
+          <span class="hchip ${aStatusClass(item.status)}">${esc(aStatusLabel(item.status))}</span>
+        </div>
+      </div>
+      <div class="hmini">${esc(fmtAt(Date.parse(item.updatedAt || item.createdAt)))} ・ ${esc(item.source || 'manual')}</div>
+      <div class="acts">
+        <button class="hbtn" onclick="runAItem('${item.id}')">▶ ${item.status === 'pending' ? '今すぐ検証' : '再検証'}</button>
+        ${item.reportId ? `<button class="hbtn alt" onclick="openAReport('${item.reportId}')">レポート</button>` : ''}
+        <button class="hbtn warn" onclick="deleteAItem('${item.id}')">削除</button>
+      </div>
+    </div>`).join('');
+}
+function renderAInbox() {
+  if (!ASTATUS) return '<div class="empty">鑑定士の状態を取得できません</div>';
+  const cfg = ASTATUS.config || {};
+  const xcfg = (cfg && cfg.xApi) || {};
+  const xst = ASTATUS.xStatus || {};
+  const queue = (AITEMS || []).slice().sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  return `
+    <div class="hcard">
+      <form onsubmit="return addAInbox(event)">
+        <div class="hlabel">URL 手動追加</div>
+        <div class="hgrid" style="margin-top:10px">
+          <div style="grid-column:1 / -1"><input class="hinput" id="a-inbox-url" placeholder="https://x.com/... または https://github.com/..."></div>
+          <div style="grid-column:1 / -1"><textarea class="htextarea" id="a-inbox-note" placeholder="メモ(任意)"></textarea></div>
+        </div>
+        <div class="hrow">
+          <button class="hbtn" type="submit">受信箱へ追加</button>
+          <button class="hbtn alt" type="button" onclick="runAItem()" ${aBusy ? 'disabled' : ''}>▶ 今すぐ検証</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="hcard">
+      <form onsubmit="return saveAXConfig(event)">
+        <div class="hlabel">X API 設定</div>
+        <div class="hmini"><code>appraiser-config.json</code> に保存します。401 が出た場合は自動再試行しません。</div>
+        <div class="hgrid" style="margin-top:10px">
+          <div style="grid-column:1 / -1"><div class="hlabel">bearerToken</div><input class="hinput" id="a-x-token" value="${esc(xcfg.bearerToken || '')}" placeholder="OAuth2 user context access token"></div>
+          <div><div class="hlabel">userId</div><input class="hinput" id="a-x-user-id" value="${esc(xcfg.userId || '')}" placeholder="1234567890"></div>
+          <div><div class="hlabel">intervalHours</div><input class="hinput" id="a-x-interval" type="number" min="1" max="336" value="${esc(xcfg.intervalHours || 6)}"></div>
+        </div>
+        <div class="htoggle" style="margin-top:10px">
+          <div><div class="hlabel">bookmarks を取得</div><div class="hmeta">初回は最新20件、それ以降は差分のみを最大50件まで。</div></div>
+          <input type="checkbox" id="a-x-bookmarks" ${xcfg.pollBookmarks ? 'checked' : ''}>
+        </div>
+        <div class="htoggle" style="margin-top:10px">
+          <div><div class="hlabel">likes を取得</div><div class="hmeta">必要な場合だけ有効化。</div></div>
+          <input type="checkbox" id="a-x-likes" ${xcfg.pollLikes ? 'checked' : ''}>
+        </div>
+        <div class="hrow"><button class="hbtn" type="submit">X 設定を保存</button></div>
+      </form>
+      <div class="hmeta" style="margin-top:10px">接続状態: ${xst.configured ? '設定済み' : '未設定'}${xst.lastSuccessAt ? ` ・ 最終成功 ${esc(fmtAt(Date.parse(xst.lastSuccessAt)))}` : ''}${xst.lastImported ? ` ・ 直近 import B${Number(xst.lastImported.bookmarks) || 0}/L${Number(xst.lastImported.likes) || 0}` : ''}</div>
+      ${xst.authError ? `<div class="hmini" style="color:#c0392b">認証エラー: ${esc(xst.authError.message || '401')}</div>` : xst.lastError ? `<div class="hmini" style="color:#c0392b">直近エラー: ${esc(xst.lastError)}</div>` : ''}
+    </div>
+
+    ${aQueueList(queue)}`;
+}
+function renderAReports() {
+  if (!AREPORTS.length) return '<div class="empty">レポートはまだありません</div>';
+  const selected = AREPORTS.find((report) => report.id === aCurrentReportId) || AREPORTS[0];
+  const cached = selected ? aReportCache[selected.id] : null;
+  return `
+    <div class="hsplit">
+      <div class="hout-list">
+        ${AREPORTS.map((report) => `
+          <div class="hout-item ${selected && selected.id === report.id ? 'active' : ''}" onclick="selectAReport('${report.id}')">
+            <div class="ttl">${esc(report.title || report.summary || report.url || report.id)}</div>
+            <div class="hrow" style="margin-top:6px">
+              <span class="hchip ${aCategoryClass(report.category)}">${esc(aCategoryLabel(report.category))}</span>
+              ${aScoreBadge(report.score)}
+              ${report.merchantQueued ? '<span class="hchip warn">商人連携</span>' : ''}
+            </div>
+            <div class="meta">${esc(fmtAt(Date.parse(report.updatedAt || report.createdAt)))} ・ relevance ${esc(report.relevance)}</div>
+          </div>`).join('')}
+      </div>
+      <div class="hout-view">
+        ${selected ? `
+          <div class="hrow" style="justify-content:space-between;margin-top:0">
+            <div>
+              <div class="hlabel">レポート</div>
+              <div class="hmeta"><b>${esc(selected.title || selected.summary || selected.url || selected.id)}</b><br>${esc(selected.url || '')}</div>
+            </div>
+            <div class="hrow" style="margin-top:0">
+              <span class="hchip ${aCategoryClass(selected.category)}">${esc(aCategoryLabel(selected.category))}</span>
+              ${aScoreBadge(selected.score)}
+              ${selected.merchantQueued ? `<span class="hchip warn">商人 ${esc(selected.merchantJobId || '')}</span>` : ''}
+            </div>
+          </div>
+          <div style="margin-top:12px">${mdToHtml((cached && cached.body) || '')}</div>
+        ` : '<div class="empty">レポートを選択してください</div>'}
+      </div>
+    </div>`;
+}
+function renderASettings() {
+  if (!ASTATUS) return '<div class="empty">状態を取得できません</div>';
+  const cfg = ASTATUS.config || {};
+  return `
+    <div class="hcard">
+      <form onsubmit="return saveAConfig(event)">
+        <div class="htoggle">
+          <div>
+            <div class="hlabel">handsOn</div>
+            <div class="hmeta">GitHub リポジトリだけ shallow clone して、Claude CLI で最小スモークテストを試します。</div>
+          </div>
+          <input type="checkbox" id="a-hands-on" ${cfg.handsOn ? 'checked' : ''}>
+        </div>
+        <div class="hgrid" style="margin-top:10px">
+          <div><div class="hlabel">testTimeoutSec</div><input class="hinput" id="a-test-timeout" type="number" min="60" max="3600" value="${esc(cfg.testTimeoutSec || 900)}"></div>
+        </div>
+        <div class="hlabel" style="margin-top:12px">関心プロフィール</div>
+        <textarea class="htextarea" id="a-interest-profile">${esc(cfg.interestProfile || '')}</textarea>
+        <div class="hrow"><button class="hbtn" type="submit">設定を保存</button></div>
+      </form>
+      ${ASTATUS.runtime && ASTATUS.runtime.blockers && ASTATUS.runtime.blockers.length ? `<div class="hmini">ブロッカー: ${esc(ASTATUS.runtime.blockers.join(' / '))}</div>` : ''}
+    </div>`;
+}
+function renderAPanel() {
+  renderATabs();
+  renderAHeader();
+  const body = $('a-body');
+  if (!body) return;
+  if (!ASTATUS && !aBusy) {
+    body.innerHTML = '<div class="empty">鑑定士の状態を読み込み中…</div>';
+    return;
+  }
+  body.innerHTML = aTab === 'inbox' ? renderAInbox() : aTab === 'reports' ? renderAReports() : renderASettings();
+}
+async function saveAXConfig(ev) {
+  ev.preventDefault();
+  try {
+    aBusy = true;
+    const cfg = (ASTATUS && ASTATUS.config) || {};
+    const j = await hFetchJson('/api/appraiser/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...cfg,
+        xApi: {
+          bearerToken: $('a-x-token').value.trim(),
+          userId: $('a-x-user-id').value.trim(),
+          pollBookmarks: $('a-x-bookmarks').checked,
+          pollLikes: $('a-x-likes').checked,
+          intervalHours: Number($('a-x-interval').value),
+        },
+      }),
+    });
+    ASTATUS = j.status || ASTATUS;
+    await loadAppraiserData();
+    renderAPanel();
+  } catch (e) {
+    alert('X 設定を保存できませんでした: ' + e.message);
+  } finally { aBusy = false; renderAPanel(); }
+  return false;
+}
+async function saveAConfig(ev) {
+  ev.preventDefault();
+  try {
+    aBusy = true;
+    const cfg = (ASTATUS && ASTATUS.config) || {};
+    const j = await hFetchJson('/api/appraiser/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...cfg,
+        handsOn: $('a-hands-on').checked,
+        testTimeoutSec: Number($('a-test-timeout').value),
+        interestProfile: $('a-interest-profile').value.trim(),
+      }),
+    });
+    ASTATUS = j.status || ASTATUS;
+    await loadAppraiserData();
+    renderAPanel();
+  } catch (e) {
+    alert('設定を保存できませんでした: ' + e.message);
+  } finally { aBusy = false; renderAPanel(); }
+  return false;
+}
+async function addAInbox(ev) {
+  ev.preventDefault();
+  const url = $('a-inbox-url').value.trim();
+  const note = $('a-inbox-note').value.trim();
+  if (!url) return false;
+  try {
+    aBusy = true;
+    await hFetchJson('/api/appraiser/inbox', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, note }),
+    });
+    $('a-inbox-url').value = '';
+    $('a-inbox-note').value = '';
+    await loadAppraiserData();
+    renderAPanel();
+  } catch (e) {
+    alert('受信箱へ追加できませんでした: ' + e.message);
+  } finally { aBusy = false; renderAPanel(); }
+  return false;
+}
+async function deleteAItem(id) {
+  try {
+    aBusy = true;
+    await hFetchJson('/api/appraiser/items/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (aCurrentReportId === id) aCurrentReportId = null;
+    delete aReportCache[id];
+    await loadAppraiserData();
+    renderAPanel();
+  } catch (e) {
+    alert('削除できませんでした: ' + e.message);
+  } finally { aBusy = false; renderAPanel(); }
+}
+async function runAItem(id) {
+  try {
+    aBusy = true;
+    renderAPanel();
+    const j = await hFetchJson('/api/appraiser/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(id ? { id } : {}),
+    });
+    await loadAppraiserData();
+    if (j && j.item && j.item.reportId) {
+      aCurrentReportId = j.item.reportId;
+      aTab = 'reports';
+      await loadAReport(aCurrentReportId);
+    }
+    renderAPanel();
+  } catch (e) {
+    alert('検証を実行できませんでした: ' + e.message);
+  } finally { aBusy = false; renderAPanel(); }
+}
+async function loadAReport(id) {
+  if (!id || aReportCache[id]) return;
+  try {
+    aReportCache[id] = await hFetchJson('/api/appraiser/reports/' + encodeURIComponent(id));
+  } catch (e) {
+    aReportCache[id] = { body: '読み込みに失敗しました: ' + e.message };
+  }
+  if ($('apanel').classList.contains('open') && aTab === 'reports') renderAPanel();
+}
+function selectAReport(id) {
+  aCurrentReportId = id;
+  renderAPanel();
+  loadAReport(id);
+}
+function openAReport(id) {
+  aCurrentReportId = id;
+  aTab = 'reports';
+  renderAPanel();
+  loadAReport(id);
+}
+maybePollAppraiser(true);
+
 /* ══════════ 商人(内職)══════════ */
 function hTypeLabel(type) {
   return {
@@ -4077,7 +4555,7 @@ function setHTab(tab) {
   renderHPanel();
 }
 function openHPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeCPanel(); closeTPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeAPanel(); closeCPanel(); closeTPanel();
   $('hpanel').classList.add('open');
   localStorage.setItem('hSeenAt', String(Date.now()));
   if (hUnread) { hUnread = false; forceRerender(); }
@@ -4668,7 +5146,7 @@ function setCTab(tab) {
   renderCPanel();
 }
 function openCPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel(); closeTPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeTPanel();
   $('cpanel').classList.add('open');
   localStorage.setItem('cSeenAt', String(Date.now()));
   if (cUnread) { cUnread = false; forceRerender(); }
@@ -5030,7 +5508,7 @@ function setTTab(tab) {
   renderTPanel();
 }
 function openTPanel() {
-  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeHPanel(); closeCPanel();
+  closePanel(); closeGPanel(); closeSPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeCPanel();
   $('tpanel').classList.add('open');
   renderTPanel();
   maybePollTrader(true);
@@ -5293,6 +5771,7 @@ function makeResizable(panelId, handle) {
 }
 makeResizable('spanel', $('s-resize'));
 makeResizable('xpanel', $('x-resize'));
+makeResizable('apanel', $('a-resize'));
 makeResizable('hpanel', $('h-resize'));
 makeResizable('cpanel', $('c-resize'));
 makeResizable('tpanel', $('t-resize'));
@@ -5564,7 +6043,7 @@ function renderGoogle() {
   $('g-body').innerHTML = html;
 }
 
-function openGPanel() { closeSPanel(); closeXPanel(); closeHPanel(); closeCPanel(); closeTPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
+function openGPanel() { closeSPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeCPanel(); closeTPanel(); $('gpanel').classList.add('open'); renderGoogle(); }
 function closeGPanel() { $('gpanel').classList.remove('open'); }
 
 async function toggleTask(listId, taskId, completed) {
@@ -5641,7 +6120,7 @@ async function loadSStatus() {
 }
 
 async function openSPanel() {
-  closePanel(); closeGPanel(); closeXPanel(); closeHPanel(); closeCPanel(); closeTPanel();
+  closePanel(); closeGPanel(); closeXPanel(); closeAPanel(); closeHPanel(); closeCPanel(); closeTPanel();
   $('spanel').classList.add('open');
   renderSChat();
   // 開くたびにサーバーから最新履歴を取得(他端末での会話を反映)。

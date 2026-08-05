@@ -30,6 +30,10 @@ Claude Code / AI エージェントのセッションを、アイソメトリッ
   - 指定トピックのニュース・論文を Web 検索で調べ、**🔥 hot なトピック / 📄 注目の論文(arXiv 等・リンク付き) / 🌊 分野の潮流** にまとめて表示
   - トピックを入力してその場で調査でき、保存したトピックは**毎週月曜の朝9時**に自動で最新化(サーバー起動中のみ)
   - 実行手段は秘書と同じ(Claude CLI のサブスク枠 / Anthropic API)。新着レポートがあるとキャラに「!」バッジ
+- **鑑定士(任意)** — 自動化エリアの「鑑定士」(🧐)をクリックすると、X のいいね/ブックマークや手動共有 URL を夜間の遊休時間に深掘り検証するパネルが開く
+  - `POST /api/appraiser/inbox` または `GET /appraiser/add?url=...` で URL を受信箱へ積み、X ポスト URL は `publish.twitter.com/oembed` で本文取得を試す(失敗しても URL のみで継続)
+  - `appraiser-config.json` に `xApi` を設定すると `GET https://api.x.com/2/users/{id}/bookmarks` / `liked_tweets` を差分ポーリングし、分類 → 調査 → レポート生成まで自動実行
+  - GitHub / arXiv / 一般記事の本文を拾って `data/appraiser/reports/*.md` に Markdown レポートを保存し、高評価の `money` 判定は商人の `idea_research` に自動連携
 - **商人・内職(任意)** — オフィス右手前の「商人・内職」(💰)をクリックすると、遊休時間に回す収益化ジョブの管理パネルが開く
   - Claude Code の**直近5時間トークン使用量**と**直近の遊休時間**を見て、サブスク枠の余りを使える時だけ最古の待機ジョブを自動実行
   - ジョブ種別は **記事ドラフト / SNS導線 / 収益化ネタ調査 / 自由プロンプト**。成果物は Markdown で `data/hustler/outputs/` に保存され、新着があるとキャラに「!」バッジ
@@ -47,7 +51,7 @@ Claude Code / AI エージェントのセッションを、アイソメトリッ
   - 右上「📊 セッション一覧」から開く。実行中セッションを上部に強調表示
   - ガントチャート(開始〜最終時刻をステータス色の帯で表示)/ リスト の2ビュー、期間・並び替え・検索・プロジェクトまとめ・実行中のみ で絞り込み
   - 行をクリックすると、最初のプロンプト・モデル・トークン内訳・ツール実行内訳・サブエージェントを展開表示
-- **完全ローカル** — 依存パッケージなし(Node.js 標準ライブラリのみ)。外部通信は、任意の Google 連携を有効にした場合の Google API と、トレーダーを有効化した場合の CoinGecko API のみ
+- **完全ローカル** — 依存パッケージなし(Node.js 標準ライブラリのみ)。外部通信は opt-in の Google API / CoinGecko API / X API / `publish.twitter.com` / GitHub API / Anthropic API のみ
 
 ## 使い方
 
@@ -215,6 +219,49 @@ ANTHROPIC_API_KEY=sk-ant-... node server.js        # モデル変更は SECRETAR
 - 週次の自動調査は CLI のサブスク枠(または API の従量課金)を消費します。不要なら未設定(off)にするか、トピックを保存しないでください。
 - 探検家・秘書アシスタントのパネルは**左端をドラッグすると幅を変更**でき、幅はブラウザに保存されます(長いレポートを読みやすく表示)。
 - **オフィスビューは拡大・縮小できます** — 右下の `＋ / −` ボタン、マウスホイール(トラックパッドのピンチ)、キーボード `+` / `−` でズーム。ホイールはカーソル位置を中心に拡大します。背景をドラッグすると表示位置を移動でき、`⤢` ボタンまたは `0` キーで全体表示に戻せます。ズーム中もキャラクターのクリック操作はそのまま使えます。
+
+## 鑑定士 — X いいね / ブックマーク検証(任意)
+
+鑑定士は、X に溜めた「研究に使えそうな技術」「稼げそうなネタ」を、夜間の遊休時間に 1 件ずつ深掘り検証するエージェントです。
+
+- 受信方法は 2 系統です。
+  - 手動: パネルの受信箱フォーム、または `GET /appraiser/add?url=...&note=...`
+  - 自動: `appraiser-config.json` の `xApi` を設定して bookmarks / likes を差分ポーリング
+- 各アイテムは `pending -> classifying -> researching -> testing -> done|error` の状態で `data/appraiser/items.json` に保存されます。
+- relevance 40 以上のものだけ本文取得と深掘り調査に進み、結果は `data/appraiser/reports/{id}.md` に frontmatter 付き Markdown で保存されます。
+- `handsOn: true` のときだけ GitHub リポジトリを `/tmp/appraiser-lab/{id}` に shallow clone し、Claude CLI へ「README どおりに最小セットアップ + スモークテスト」を依頼します。GPU 必須・大容量ダウンロード必須なら中止理由を残します。
+- `money` 判定かつ score 70 以上のレポートは、商人の `idea_research` ジョブへ自動投入します(同一レポートの重複投入は防止)。
+
+既定設定は `appraiser-config.json` に保存されます:
+
+```json
+{
+  "handsOn": false,
+  "testTimeoutSec": 900,
+  "interestProfile": "AI/ロボティクス研究、AIエージェントの収益化、個人開発での技術活用に関心が高い。",
+  "xApi": {
+    "bearerToken": "",
+    "userId": "",
+    "pollBookmarks": true,
+    "pollLikes": false,
+    "intervalHours": 6
+  }
+}
+```
+
+X API のセットアップ:
+
+1. X Developer Portal で OAuth 2.0 User Context のアクセストークンを発行
+2. 自分の numeric `userId` を確認
+3. `appraiser-config.json` かパネル UI へ `bearerToken` / `userId` / `pollBookmarks|pollLikes` / `intervalHours` を保存
+4. `pollBookmarks` か `pollLikes` を true にすると、10分ごとの定期チェック時に差分取得を試みます
+
+注意:
+
+- 初回ポーリングは最新20件だけを受信し、2回目以降は `data/appraiser/seen.json` を使って既知 tweet id に当たった時点でページングを止めます。
+- 1回のポーリングで受け取るのは最大50件です。
+- 401(トークン期限切れなど)が出た場合は `status` に表示し、設定を保存し直すまで自動再試行しません。
+- X API の Owned Reads は目安として **$0.001 / 件** なので、likes まで広げる場合は件数に注意してください。
 
 ## トレーダー猫(ペーパートレード)(任意)
 
