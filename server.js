@@ -28,6 +28,7 @@ const TRADER_DIR = path.join(DATA_DIR, 'trader');
 const TRADER_PRICES_PATH = path.join(TRADER_DIR, 'prices.jsonl');
 const TRADER_PORTFOLIO_PATH = path.join(TRADER_DIR, 'portfolio.json');
 const TRADER_CONFIG_PATH = path.join(__dirname, 'trader-config.json');
+const TRADER_STATE_PATH = path.join(TRADER_DIR, 'state.json');
 const ZONE_OVERRIDES_PATH = path.join(__dirname, 'zone-overrides.json');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
 const HUSTLER_CHECK_MS = 10 * 60 * 1000;
@@ -58,6 +59,7 @@ const DEFAULT_TRADER_PATHS = {
   pricesPath: TRADER_PRICES_PATH,
   portfolioPath: TRADER_PORTFOLIO_PATH,
   configPath: TRADER_CONFIG_PATH,
+  statePath: TRADER_STATE_PATH,
 };
 
 /**
@@ -660,7 +662,7 @@ function flattenForCli(messages) {
 }
 
 /** Claude Code CLI をヘッドレス(-p)で実行して応答テキストを返す */
-function runClaudeCli({ cli, model, system, prompt }) {
+function runClaudeCli({ cli, model, system, prompt, timeoutSec = 60 }) {
   return new Promise((resolve, reject) => {
     const args = [
       '-p', prompt,
@@ -676,18 +678,35 @@ function runClaudeCli({ cli, model, system, prompt }) {
       child = spawn(cli || 'claude', args, { env: process.env, cwd: os.tmpdir() });
     } catch (e) { reject(new Error('起動失敗: ' + e.message)); return; }
     let out = '', err = '';
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('タイムアウト(60秒)')); }, 60e3);
+    const timeoutMs = Math.max(1, Number(timeoutSec) || 60) * 1000;
+    let settled = false;
+    const settleReject = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+    const settleResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      settleReject(new Error(`タイムアウト(${Math.max(1, Math.round(timeoutMs / 1000))}秒)`));
+    }, timeoutMs);
     child.stdout.on('data', (d) => { out += d; });
     child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(new Error('起動失敗: ' + e.message)); });
+    child.on('error', (e) => settleReject(new Error('起動失敗: ' + e.message)));
     child.on('close', () => {
-      clearTimeout(timer);
+      if (settled) return;
       try {
         const j = JSON.parse(out);
-        if (j.is_error) return reject(new Error(String(j.result || 'CLI エラー').slice(0, 160)));
-        resolve(String(j.result || '').trim());
+        if (j.is_error) return settleReject(new Error(String(j.result || 'CLI エラー').slice(0, 160)));
+        settleResolve(String(j.result || '').trim());
       } catch {
-        reject(new Error((err || out || '応答なし').slice(0, 160)));
+        settleReject(new Error((err || out || '応答なし').slice(0, 160)));
       }
     });
   });
@@ -763,6 +782,7 @@ const DEFAULT_HUSTLER_CONFIG = {
   qualityThreshold: 75,
   maxRevisions: 2,
   autoFromExplorer: true,
+  cliTimeoutSec: 300,
   publish: {
     enabled: false,
     mode: 'zenn-git',
@@ -789,7 +809,22 @@ const DEFAULT_TRADER_CONFIG = {
   priceIntervalMin: 15,
   analysisHour: 7,
   startBalance: 100000,
+  priceProvider: 'auto',
+  symbolMap: {
+    bitcoin: 'BTC-JPY',
+    ethereum: 'ETH-JPY',
+  },
 };
+const DEFAULT_TRADER_FETCH_STATE = {
+  currentProvider: null,
+  providerMemoUntil: 0,
+  lastFetchAt: null,
+  lastFetchOk: null,
+  lastFetchError: '',
+  lastFetchProvider: null,
+};
+const TRADER_PRICE_PROVIDERS = new Set(['auto', 'coingecko', 'yahoo']);
+const TRADER_PROVIDER_MEMO_MS = 60 * 60 * 1000;
 
 let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 let traderRunning = false; // 多重実行防止(手動 + 定期実行で共有)
@@ -827,18 +862,63 @@ function sanitizeTraderAssetIds(items) {
   return out.length ? out : DEFAULT_TRADER_CONFIG.assets.slice();
 }
 
+function sanitizeTraderProvider(value) {
+  return TRADER_PRICE_PROVIDERS.has(value) ? value : DEFAULT_TRADER_CONFIG.priceProvider;
+}
+
+function sanitizeTraderSymbol(value) {
+  const symbol = typeof value === 'string'
+    ? value.trim().toUpperCase().replace(/[^A-Z0-9=._-]/g, '').slice(0, 32)
+    : '';
+  return symbol || '';
+}
+
+function sanitizeTraderSymbolMap(input, assets = DEFAULT_TRADER_CONFIG.assets) {
+  const src = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  const clean = {};
+  const source = { ...DEFAULT_TRADER_CONFIG.symbolMap, ...src };
+  for (const asset of assets) {
+    const key = sanitizeTraderAssetIds([asset])[0];
+    if (!key) continue;
+    const symbol = sanitizeTraderSymbol(source[key]);
+    if (symbol) clean[key] = symbol;
+  }
+  return clean;
+}
+
 function sanitizeTraderConfig(input) {
   const src = (input && typeof input === 'object') ? input : {};
+  const assets = sanitizeTraderAssetIds(src.assets);
   const vsCurrency = typeof src.vsCurrency === 'string'
     ? src.vsCurrency.trim().toLowerCase().replace(/[^a-z]/g, '').slice(0, 12)
     : '';
   return {
     enabled: !!src.enabled,
-    assets: sanitizeTraderAssetIds(src.assets),
+    assets,
     vsCurrency: vsCurrency || DEFAULT_TRADER_CONFIG.vsCurrency,
     priceIntervalMin: Math.max(5, Math.min(24 * 60, Math.round(Number(src.priceIntervalMin) || DEFAULT_TRADER_CONFIG.priceIntervalMin))),
     analysisHour: Math.max(0, Math.min(23, Math.round(Number(src.analysisHour) || DEFAULT_TRADER_CONFIG.analysisHour))),
     startBalance: Math.max(1000, Math.min(1000000000, Math.round(Number(src.startBalance) || DEFAULT_TRADER_CONFIG.startBalance))),
+    priceProvider: sanitizeTraderProvider(src.priceProvider),
+    symbolMap: sanitizeTraderSymbolMap(src.symbolMap, assets),
+  };
+}
+
+function sanitizeTraderFetchState(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  const currentProvider = src.currentProvider === 'coingecko' || src.currentProvider === 'yahoo'
+    ? src.currentProvider
+    : null;
+  const lastFetchProvider = src.lastFetchProvider === 'coingecko' || src.lastFetchProvider === 'yahoo'
+    ? src.lastFetchProvider
+    : null;
+  return {
+    currentProvider,
+    providerMemoUntil: Math.max(0, Number(src.providerMemoUntil) || 0),
+    lastFetchAt: typeof src.lastFetchAt === 'string' ? src.lastFetchAt : null,
+    lastFetchOk: typeof src.lastFetchOk === 'boolean' ? src.lastFetchOk : null,
+    lastFetchError: typeof src.lastFetchError === 'string' ? src.lastFetchError.slice(0, 500) : '',
+    lastFetchProvider,
   };
 }
 
@@ -933,6 +1013,9 @@ function ensureTraderStorage(paths = null) {
   }
   if (!fs.existsSync(p.portfolioPath)) {
     fs.writeFileSync(p.portfolioPath, JSON.stringify(makeDefaultTraderPortfolio(DEFAULT_TRADER_CONFIG.startBalance), null, 2) + '\n');
+  }
+  if (!fs.existsSync(p.statePath)) {
+    fs.writeFileSync(p.statePath, JSON.stringify(DEFAULT_TRADER_FETCH_STATE, null, 2) + '\n');
   }
   return p;
 }
@@ -1161,6 +1244,7 @@ function sanitizeHustlerConfig(input) {
     qualityThreshold: Math.max(0, Math.min(100, Math.round(Number(src.qualityThreshold) || DEFAULT_HUSTLER_CONFIG.qualityThreshold))),
     maxRevisions: Math.max(0, Math.min(5, Math.round(Number(src.maxRevisions) || DEFAULT_HUSTLER_CONFIG.maxRevisions))),
     autoFromExplorer: src.autoFromExplorer !== false,
+    cliTimeoutSec: Math.max(1, Math.min(1800, Math.round(Number(src.cliTimeoutSec) || DEFAULT_HUSTLER_CONFIG.cliTimeoutSec))),
     publish: sanitizeHustlerPublishConfig({ ...DEFAULT_HUSTLER_CONFIG.publish, ...(src.publish || {}) }),
     affiliate: sanitizeAffiliateConfig({ ...DEFAULT_HUSTLER_CONFIG.affiliate, ...(src.affiliate || {}) }),
   };
@@ -1187,6 +1271,19 @@ function saveTraderConfig(config, paths = null) {
   const p = ensureTraderStorage(paths);
   const clean = sanitizeTraderConfig(config);
   fs.writeFileSync(p.configPath, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
+}
+
+function loadTraderFetchState(paths = null) {
+  const p = ensureTraderStorage(paths);
+  const stored = readJsonFileSafe(p.statePath, DEFAULT_TRADER_FETCH_STATE);
+  return sanitizeTraderFetchState({ ...DEFAULT_TRADER_FETCH_STATE, ...stored });
+}
+
+function saveTraderFetchState(state, paths = null) {
+  const p = ensureTraderStorage(paths);
+  const clean = sanitizeTraderFetchState({ ...DEFAULT_TRADER_FETCH_STATE, ...(state || {}) });
+  fs.writeFileSync(p.statePath, JSON.stringify(clean, null, 2) + '\n');
   return clean;
 }
 
@@ -1354,6 +1451,8 @@ function normalizeHustlerJob(job) {
     score: review && review.score != null ? review.score : (Number.isFinite(Number(job.score)) ? Math.max(0, Math.min(100, Math.round(Number(job.score)))) : null),
     review,
     revisionCount: Math.max(0, Math.min(20, Math.round(Number(job.revisionCount) || 0))),
+    retryCount: Math.max(0, Math.min(20, Math.round(Number(job.retryCount) || 0))),
+    resumeFromDraft: !!job.resumeFromDraft,
     stateHistory: normalizeStateHistory(job.stateHistory, status, createdAt),
     slug: typeof job.slug === 'string' ? job.slug.slice(0, 60) : null,
     publishedAt: typeof job.publishedAt === 'string' ? job.publishedAt : null,
@@ -1385,6 +1484,46 @@ function resetStaleHustlerJobs() {
     }
   }
   if (changed) saveHustlerJobs(jobs);
+}
+
+function getHustlerResumeDraftRecord(job) {
+  if (!job || !requiresHustlerReview(job.type) || !job.outputId) return null;
+  if (!job.resumeFromDraft && job.status !== 'error') return null;
+  const output = readHustlerOutputRecord(job.outputId);
+  if (!output) return null;
+  const rawBody = String(output.rawBody || output.body || '').trim();
+  if (!rawBody) return null;
+  return {
+    output,
+    rawBody,
+    revisionCount: Math.max(0, output.revisionCount || job.revisionCount || 0),
+  };
+}
+
+function queueRetryableHustlerErrors(note = '自動リトライ待ちに戻しました') {
+  const jobs = loadHustlerJobs();
+  let changed = false;
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
+    if (job.status !== 'error' || job.retryCount >= 2) continue;
+    const resume = getHustlerResumeDraftRecord({ ...job, resumeFromDraft: true });
+    jobs[i] = transitionHustlerJob(job, 'pending', {
+      startedAt: null,
+      finishedAt: null,
+      error: null,
+      publishError: null,
+      resumeFromDraft: !!resume,
+      retryCount: job.retryCount + 1,
+    }, `${note}${resume ? ' (保存済みドラフトから再開)' : ''}`);
+    if (resume) {
+      saveHustlerOutputRecord(transitionHustlerOutput(resume.output, 'pending', {
+        publishError: null,
+      }, '再実行待ちに戻しました'));
+    }
+    changed = true;
+  }
+  if (changed) saveHustlerJobs(jobs);
+  return changed;
 }
 
 function loadHustlerRevenue() {
@@ -2182,24 +2321,30 @@ function parseHustlerEvaluation(text) {
   return review;
 }
 
-async function runHustlerTextTask({ cfg, prompt, system, maxTokens = 2200 }) {
+async function runHustlerTextTask({ cfg, prompt, system, maxTokens = 2200, timeoutSec = 60 }) {
   if (cfg.mode === 'cli') {
-    return runClaudeCli({ cli: cfg.cli, model: cfg.model, system, prompt });
+    return runClaudeCli({ cli: cfg.cli, model: cfg.model, system, prompt, timeoutSec });
   }
   return runClaudeApiText({ apiKey: cfg.apiKey, model: cfg.model, system, prompt, maxTokens });
 }
 
-async function generateHustlerContent(job, cfg, task) {
+async function generateHustlerContent(job, cfg, task, options = {}) {
   if (task.useResearch && cfg.mode === 'api') {
     return runResearchApi({ apiKey: cfg.apiKey, model: cfg.model, prompt: task.prompt });
   }
   if (task.useResearch && cfg.mode === 'cli') {
     return runResearchCli({ cli: cfg.cli, model: cfg.model, prompt: task.prompt });
   }
-  return runHustlerTextTask({ cfg, system: hustlerSystemPrompt(), prompt: task.prompt, maxTokens: 2600 });
+  return runHustlerTextTask({
+    cfg,
+    system: hustlerSystemPrompt(),
+    prompt: task.prompt,
+    maxTokens: 2600,
+    timeoutSec: options.timeoutSec,
+  });
 }
 
-async function evaluateArticleDraft(job, content, cfg, qualityThreshold) {
+async function evaluateArticleDraft(job, content, cfg, qualityThreshold, options = {}) {
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await runHustlerTextTask({
@@ -2207,6 +2352,7 @@ async function evaluateArticleDraft(job, content, cfg, qualityThreshold) {
       system: hustlerReviewSystemPrompt(),
       prompt: buildHustlerReviewPrompt(job, content, qualityThreshold),
       maxTokens: 900,
+      timeoutSec: options.timeoutSec,
     });
     try {
       return parseHustlerEvaluation(raw);
@@ -2457,6 +2603,7 @@ function getHustlerStatus() {
     qualityThreshold: config.qualityThreshold,
     maxRevisions: config.maxRevisions,
     autoFromExplorer: config.autoFromExplorer,
+    cliTimeoutSec: config.cliTimeoutSec,
     publish: config.publish,
     affiliate: config.affiliate,
     canRun,
@@ -2464,6 +2611,35 @@ function getHustlerStatus() {
     lastRun,
     running: hustlerRunning,
     mode: provider.mode,
+  };
+}
+
+function retryHustlerOutput(outputId) {
+  const output = readHustlerOutputRecord(outputId);
+  if (!output) throw new Error('成果物が見つかりません');
+  if (!output.jobId) throw new Error('紐づくジョブがありません');
+  const jobs = loadHustlerJobs();
+  const idx = jobs.findIndex((job) => job.id === output.jobId);
+  if (idx < 0) throw new Error('紐づくジョブが見つかりません');
+  if (HUSTLER_RESTARTABLE_STATUSES.has(jobs[idx].status)) {
+    throw new Error('このジョブはすでに実行中です');
+  }
+  const resume = getHustlerResumeDraftRecord({ ...jobs[idx], status: 'error', resumeFromDraft: true });
+  jobs[idx] = transitionHustlerJob(jobs[idx], 'pending', {
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    publishError: null,
+    resumeFromDraft: !!resume,
+    retryCount: jobs[idx].retryCount + 1,
+  }, `手動で再実行待ちへ戻しました${resume ? ' (保存済みドラフトから再開)' : ''}`);
+  saveHustlerJobs(jobs);
+  saveHustlerOutputRecord(transitionHustlerOutput(output, 'pending', {
+    publishError: null,
+  }, '手動で再実行待ちへ戻しました'));
+  return {
+    job: jobs[idx],
+    output: readHustlerOutputRecord(outputId),
   };
 }
 
@@ -2486,36 +2662,56 @@ async function executeHustlerJob(jobId) {
     if (!config.affiliate.links.length) throw new Error('affiliate リンクが未設定です');
     resolveAffiliateLinksForJob(jobs[idx], config, { strict: !!(jobs[idx].affiliateLinkLabels && jobs[idx].affiliateLinkLabels.length) });
   }
-  const startedAt = jobs[idx].startedAt || new Date().toISOString();
+  const resumeDraft = getHustlerResumeDraftRecord(jobs[idx]);
+  const startedAt = new Date().toISOString();
   jobs[idx] = transitionHustlerJob(jobs[idx], 'running', {
     startedAt,
     finishedAt: null,
     error: null,
     publishError: null,
-  }, '生成開始');
+    resumeFromDraft: false,
+  }, resumeDraft ? '保存済みドラフトから再開' : '生成開始');
   saveHustlerJobs(jobs);
 
   hustlerRunning = true;
   try {
     let job = jobs[idx];
-    const task = buildHustlerJobPrompt(job, config);
-    let draftForModel = String(await generateHustlerContent(job, cfg, task) || '(成果物が空でした)').trim();
-    let output = createHustlerOutput(job, finalizeHustlerContentForStorage(job, draftForModel, config), {
-      state: requiresHustlerReview(job.type) ? 'evaluating' : 'approved',
-      note: requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了',
-    });
-    job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, requiresHustlerReview(job.type) ? 'evaluating' : 'approved', {
-      outputId: output.id,
-      score: null,
-      review: null,
-      revisionCount: 0,
-      error: null,
-      finishedAt: requiresHustlerReview(job.type) ? null : output.createdAt,
-    }, requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了')) || job;
+    let draftForModel = '';
+    let output;
+    let startRevisionIndex = 0;
+    if (resumeDraft) {
+      draftForModel = resumeDraft.rawBody;
+      startRevisionIndex = resumeDraft.revisionCount;
+      output = saveHustlerOutputRecord(transitionHustlerOutput(resumeDraft.output, 'evaluating', {
+        revisionCount: startRevisionIndex,
+        publishError: null,
+      }, '保存済みドラフトから評価再開'));
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, 'evaluating', {
+        outputId: output.id,
+        revisionCount: startRevisionIndex,
+        error: null,
+        finishedAt: null,
+      }, '保存済みドラフトから評価再開')) || job;
+    } else {
+      const task = buildHustlerJobPrompt(job, config);
+      draftForModel = String(await generateHustlerContent(job, cfg, task, { timeoutSec: config.cliTimeoutSec }) || '(成果物が空でした)').trim();
+      output = createHustlerOutput(job, finalizeHustlerContentForStorage(job, draftForModel, config), {
+        state: requiresHustlerReview(job.type) ? 'evaluating' : 'approved',
+        note: requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了',
+      });
+      job = updateHustlerJobById(job.id, (current) => transitionHustlerJob(current, requiresHustlerReview(job.type) ? 'evaluating' : 'approved', {
+        outputId: output.id,
+        score: null,
+        review: null,
+        revisionCount: 0,
+        error: null,
+        finishedAt: requiresHustlerReview(job.type) ? null : output.createdAt,
+      }, requiresHustlerReview(job.type) ? 'ドラフト生成完了' : '成果物生成完了')) || job;
+    }
 
     if (!requiresHustlerReview(job.type)) return job;
 
-    for (let revisionIndex = 0; revisionIndex <= config.maxRevisions; revisionIndex++) {
+    for (let revisionIndex = startRevisionIndex; revisionIndex <= config.maxRevisions; revisionIndex++) {
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
         revisionCount: revisionIndex,
       }, revisionIndex > 0 ? `リライト ${revisionIndex} 回目の評価` : '初回評価'));
@@ -2525,7 +2721,9 @@ async function executeHustlerJob(jobId) {
         error: null,
       }, revisionIndex > 0 ? `リライト ${revisionIndex} 回目の評価` : '初回評価')) || job;
 
-      const review = await evaluateArticleDraft(job, stripHustlerMetaComment(draftForModel), cfg, config.qualityThreshold);
+      const review = await evaluateArticleDraft(job, stripHustlerMetaComment(draftForModel), cfg, config.qualityThreshold, {
+        timeoutSec: config.cliTimeoutSec,
+      });
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'evaluating', {
         review,
         score: review.score,
@@ -2605,6 +2803,7 @@ async function executeHustlerJob(jobId) {
         system: hustlerSystemPrompt(),
         prompt: buildHustlerRevisionPrompt(job, stripHustlerMetaComment(draftForModel), review, nextRevision, config),
         maxTokens: 2600,
+        timeoutSec: config.cliTimeoutSec,
       }) || '(リライト結果が空でした)').trim();
       output = saveHustlerOutputRecord(transitionHustlerOutput(output, 'revising', {
         review,
@@ -2633,6 +2832,7 @@ async function executeHustlerJob(jobId) {
     updateHustlerJobById(jobId, (job) => transitionHustlerJob(job, 'error', {
       finishedAt: new Date().toISOString(),
       error: String(e.message || e).slice(0, 500),
+      resumeFromDraft: !!(current && current.outputId && requiresHustlerReview(current.type)),
     }, `エラー: ${String(e.message || e).slice(0, 200)}`));
     throw e;
   } finally {
@@ -2641,6 +2841,7 @@ async function executeHustlerJob(jobId) {
 }
 
 async function maybeRunHustlerScheduled() {
+  queueRetryableHustlerErrors();
   const status = getHustlerStatus();
   if (!status.canRun) return null;
   const jobs = loadHustlerJobs().filter((j) => j.status === 'pending');
@@ -2680,7 +2881,7 @@ function getTraderRuntimeGuard(nowMs = Date.now()) {
   };
 }
 
-async function fetchTraderPricesFromApi(config, options = {}) {
+async function fetchTraderPricesFromCoinGecko(config, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const ids = config.assets.join(',');
   const vs = traderPriceField(config.vsCurrency);
@@ -2707,6 +2908,101 @@ async function fetchTraderPricesFromApi(config, options = {}) {
   return prices;
 }
 
+async function fetchTraderPricesFromApi(config, options = {}) {
+  return fetchTraderPricesFromCoinGecko(config, options);
+}
+
+async function fetchTraderPricesFromYahoo(config, options = {}) {
+  const vs = traderPriceField(config.vsCurrency);
+  const changeKey = traderChangeField(vs);
+  const prices = {};
+  for (const asset of config.assets) {
+    const symbol = sanitizeTraderSymbol(config.symbolMap && config.symbolMap[asset]);
+    if (!symbol) throw new Error(`Yahoo symbolMap が未設定です: ${asset}`);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${new URLSearchParams({
+      range: '1d',
+      interval: '1h',
+    })}`;
+    let json;
+    if (options.fetchImpl) {
+      const res = await options.fetchImpl(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      });
+      if (!res.ok) throw new Error(`Yahoo ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      json = await res.json();
+    } else {
+      const { out } = await runSpawn('curl', [
+        '-sS',
+        '-f',
+        '-H', 'Accept: application/json',
+        '-H', 'User-Agent: Mozilla/5.0',
+        url,
+      ]);
+      json = JSON.parse(out);
+    }
+    const meta = json && json.chart && Array.isArray(json.chart.result) ? json.chart.result[0] && json.chart.result[0].meta : null;
+    const price = Number(meta && meta.regularMarketPrice);
+    if (!Number.isFinite(price) || price <= 0) throw new Error(`Yahoo の価格レスポンスが不正です: ${asset}`);
+    prices[asset] = { [vs]: price };
+    const prevClose = Number(meta && meta.chartPreviousClose);
+    const change = pctChange(price, prevClose);
+    if (Number.isFinite(change)) prices[asset][changeKey] = change;
+  }
+  if (!Object.keys(prices).length) throw new Error('Yahoo の価格レスポンスが空です');
+  return prices;
+}
+
+function traderFetchProviderOrder(config, state, nowMs) {
+  if (config.priceProvider === 'coingecko') return ['coingecko'];
+  if (config.priceProvider === 'yahoo') return ['yahoo'];
+  const memoActive = state.currentProvider && state.providerMemoUntil > nowMs;
+  if (memoActive && state.currentProvider === 'yahoo') return ['yahoo', 'coingecko'];
+  return ['coingecko', 'yahoo'];
+}
+
+async function fetchTraderPrices(config, options = {}) {
+  const nowMs = options.now instanceof Date ? options.now.getTime()
+    : Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const paths = traderPaths(options.paths);
+  const state = options.fetchState || loadTraderFetchState(paths);
+  const order = traderFetchProviderOrder(config, state, nowMs);
+  const attempts = [];
+  for (const provider of order) {
+    try {
+      const prices = provider === 'yahoo'
+        ? await fetchTraderPricesFromYahoo(config, options)
+        : await fetchTraderPricesFromCoinGecko(config, options);
+      const nextState = saveTraderFetchState({
+        ...state,
+        currentProvider: provider,
+        providerMemoUntil: config.priceProvider === 'auto' ? nowMs + TRADER_PROVIDER_MEMO_MS : 0,
+        lastFetchAt: new Date(nowMs).toISOString(),
+        lastFetchOk: true,
+        lastFetchError: '',
+        lastFetchProvider: provider,
+      }, paths);
+      return { provider, prices, fetchState: nextState };
+    } catch (e) {
+      attempts.push(`${provider}: ${String(e.message || e)}`);
+    }
+  }
+  const lastProvider = order[order.length - 1] || null;
+  const nextState = saveTraderFetchState({
+    ...state,
+    currentProvider: state.currentProvider || lastProvider,
+    lastFetchAt: new Date(nowMs).toISOString(),
+    lastFetchOk: false,
+    lastFetchError: attempts.join(' | ').slice(0, 500),
+    lastFetchProvider: lastProvider,
+  }, paths);
+  const err = new Error(nextState.lastFetchError || '価格取得に失敗しました');
+  err.fetchState = nextState;
+  throw err;
+}
+
 async function maybeFetchTraderPrices(options = {}) {
   const paths = traderPaths(options.paths);
   const config = options.config || loadTraderConfig(paths);
@@ -2718,7 +3014,7 @@ async function maybeFetchTraderPrices(options = {}) {
   const latestMs = latest ? Date.parse(latest.ts) : 0;
   if (!options.force && latestMs && (nowMs - latestMs) < config.priceIntervalMin * 60 * 1000) return latest;
   try {
-    const prices = await fetchTraderPricesFromApi(config, options);
+    const { prices } = await fetchTraderPrices(config, { ...options, paths, now: nowMs });
     return appendTraderPriceRecord(
       prices,
       paths,
@@ -2939,6 +3235,7 @@ function getTraderStatus(options = {}) {
   const latestPrices = options.latestPrices || traderLatestPricesMap(records, config);
   const indicators = options.indicators || computeTraderIndicators(records, config);
   const portfolio = options.portfolio || loadTraderPortfolio(paths, config);
+  const fetchStatus = options.fetchStatus || loadTraderFetchState(paths);
   const runtime = options.runtime || getTraderRuntimeGuard();
   const totals = computeTraderEquity(portfolio, latestPrices, config);
   const pnl = totals.equity - config.startBalance;
@@ -2958,6 +3255,7 @@ function getTraderStatus(options = {}) {
     marketNote: portfolio.lastAnalysis ? portfolio.lastAnalysis.marketNote : '',
     lastAnalysisAt: portfolio.lastAnalysis ? portfolio.lastAnalysis.ts : null,
     trades: portfolio.trades.slice(-20).reverse(),
+    fetchStatus,
     runtime: {
       mode: runtime.mode,
       idle: runtime.idle,
@@ -4026,6 +4324,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && /^\/api\/hustler\/retry\/[^/]+$/.test(url.pathname)) {
+    const outputId = decodeURIComponent(url.pathname.split('/').pop());
+    Promise.resolve()
+      .then(() => {
+        const result = retryHustlerOutput(outputId);
+        sendJson(res, 200, { ok: true, ...result, status: getHustlerStatus() });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
   if (url.pathname === '/api/hustler/revenue') {
     if (req.method === 'GET') {
       const items = loadHustlerRevenue().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -4207,6 +4516,7 @@ const server = http.createServer((req, res) => {
 ensureHustlerStorage();
 ensureTraderStorage();
 resetStaleHustlerJobs();
+queueRetryableHustlerErrors();
 
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
@@ -4251,6 +4561,8 @@ module.exports = {
   saveHustlerConfig,
   loadTraderConfig,
   saveTraderConfig,
+  loadTraderFetchState,
+  saveTraderFetchState,
   loadTraderPortfolio,
   saveTraderPortfolio,
   loadTraderPriceHistory,
@@ -4268,6 +4580,7 @@ module.exports = {
   getHustlerOutput,
   executeHustlerJob,
   maybeRunHustlerScheduled,
+  retryHustlerOutput,
   publishHustlerOutput,
   doResearch,
   checkWeekly,
@@ -4301,9 +4614,14 @@ module.exports = {
     traderLatestPricesMap,
     computeTraderEquity,
     parseTraderAnalysis,
+    fetchTraderPricesFromCoinGecko,
     fetchTraderPricesFromApi,
+    fetchTraderPricesFromYahoo,
+    fetchTraderPrices,
     maybeFetchTraderPrices,
     executeTraderSignals,
     getTraderRuntimeGuard,
+    getHustlerResumeDraftRecord,
+    queueRetryableHustlerErrors,
   },
 };

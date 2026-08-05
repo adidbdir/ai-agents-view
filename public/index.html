@@ -4189,6 +4189,7 @@ function renderHOutputs() {
             </div>
             <div class="hrow" style="margin-top:0">
               ${cached && cached.state === 'approved' && selectedTarget !== 'none' ? `<button class="hbtn" onclick="publishHOutput('${selected.id}')">${esc(hPublishButtonLabel(selectedTarget))}</button>` : ''}
+              ${cached && cached.state === 'error' ? `<button class="hbtn warn" onclick="retryHOutput('${selected.id}')">再実行</button>` : ''}
               <button class="hbtn alt" onclick="copyHOutput()" ${cached ? '' : 'disabled'}>コピー</button>
             </div>
           </div>
@@ -4436,6 +4437,18 @@ async function publishHOutput(id) {
     alert('公開できませんでした: ' + e.message);
   } finally { hBusy = false; renderHPanel(); }
 }
+async function retryHOutput(id) {
+  try {
+    hBusy = true;
+    await hFetchJson('/api/hustler/retry/' + encodeURIComponent(id), { method: 'POST' });
+    await loadHustlerData();
+    hCurrentOutputId = id;
+    await loadHOutput(id);
+    renderHPanel();
+  } catch (e) {
+    alert('再実行を予約できませんでした: ' + e.message);
+  } finally { hBusy = false; renderHPanel(); }
+}
 async function copyHOutput() {
   const out = hOutputCache[hCurrentOutputId];
   if (!out || !out.body) return;
@@ -4475,6 +4488,13 @@ function fmtTraderQty(n) {
   const digits = v >= 1 ? 4 : 6;
   return v.toFixed(digits).replace(/\.?0+$/, '');
 }
+function traderProviderLabel(provider) {
+  return {
+    auto: 'Auto',
+    coingecko: 'CoinGecko',
+    yahoo: 'Yahoo Finance',
+  }[provider] || provider || '未設定';
+}
 function tSignalLabel(side) {
   return { buy: '買い', sell: '売り', hold: '様子見' }[side] || side;
 }
@@ -4483,6 +4503,19 @@ function tSignalClass(side) {
 }
 function parseTraderAssets(raw) {
   return [...new Set(String(raw || '').split(/[,、\s\n]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+}
+function parseTraderSymbolMap(raw) {
+  const out = {};
+  for (const line of String(raw || '').split(/\n|,/)) {
+    const m = line.trim().match(/^([a-z0-9_-]+)\s*[:=]\s*([A-Za-z0-9=._-]+)$/);
+    if (!m) continue;
+    out[m[1].toLowerCase()] = m[2].toUpperCase();
+  }
+  return out;
+}
+function formatTraderSymbolMap(map, assets) {
+  const keys = (assets && assets.length) ? assets : Object.keys(map || {});
+  return keys.map((asset) => `${asset}=${(map && map[asset]) || ''}`).join('\n');
 }
 async function loadTraderData() {
   const prevPositive = TSTATUS && Number(TSTATUS.pnl) > 0;
@@ -4512,7 +4545,9 @@ function renderTHeader() {
     return;
   }
   const cfg = TSTATUS.config || {};
-  sub.textContent = `ペーパートレード(仮想資金) ・ CoinGecko / ${String((cfg.vsCurrency || 'jpy')).toUpperCase()} ・ ${cfg.priceIntervalMin || 15}分間隔`;
+  const fetchStatus = TSTATUS.fetchStatus || {};
+  const provider = fetchStatus.currentProvider || cfg.priceProvider || 'auto';
+  sub.textContent = `ペーパートレード(仮想資金) ・ ${traderProviderLabel(provider)} / ${String((cfg.vsCurrency || 'jpy')).toUpperCase()} ・ ${cfg.priceIntervalMin || 15}分間隔`;
   badges.innerHTML = `
     <span class="badge ${TSTATUS.enabled ? 'on' : ''}">${TSTATUS.enabled ? 'ON' : 'OFF'}</span>
     <span class="badge ${TSTATUS.runtime && TSTATUS.runtime.idle ? 'on' : ''}">${TSTATUS.runtime && TSTATUS.runtime.idle ? '遊休中' : '使用中'}</span>
@@ -4544,21 +4579,26 @@ function renderTMarket() {
   const cfg = TSTATUS.config || {};
   const latest = TSTATUS.latestPrices || { ts: null, prices: {} };
   const indicators = TSTATUS.indicators || {};
+  const fetchStatus = TSTATUS.fetchStatus || {};
   const blocker = TSTATUS.runtime && TSTATUS.runtime.blockers && TSTATUS.runtime.blockers[0];
+  const currentProvider = fetchStatus.currentProvider || cfg.priceProvider || 'auto';
+  const lastFetchResult = fetchStatus.lastFetchOk === true ? '成功' : fetchStatus.lastFetchOk === false ? '失敗' : '未取得';
   return `
     <div class="tcard">
       <form onsubmit="return saveTConfig(event)">
         <div class="ttoggle">
           <div>
             <div class="tlabel">有効化</div>
-            <div class="tmeta">CoinGecko 価格取得と日次分析は opt-in です。実売買は行いません。</div>
+            <div class="tmeta">価格取得と日次分析は opt-in です。実売買は行いません。</div>
           </div>
           <input type="checkbox" id="t-enabled" ${cfg.enabled ? 'checked' : ''}>
         </div>
         <div class="tgrid" style="margin-top:10px">
           <div style="grid-column:1 / -1"><div class="tlabel">資産ID</div><input class="tinput" id="t-assets" value="${esc((cfg.assets || []).join(', '))}" placeholder="bitcoin, ethereum"></div>
+          <div><div class="tlabel">価格プロバイダ</div><select class="tinput" id="t-provider"><option value="auto" ${cfg.priceProvider === 'auto' ? 'selected' : ''}>auto</option><option value="coingecko" ${cfg.priceProvider === 'coingecko' ? 'selected' : ''}>coingecko</option><option value="yahoo" ${cfg.priceProvider === 'yahoo' ? 'selected' : ''}>yahoo</option></select></div>
           <div><div class="tlabel">分析時刻(0-23)</div><input class="tinput" id="t-hour" type="number" min="0" max="23" value="${esc(cfg.analysisHour)}"></div>
           <div><div class="tlabel">初期資金(JPY)</div><input class="tinput" id="t-balance" type="number" min="1000" step="1000" value="${esc(cfg.startBalance)}"></div>
+          <div style="grid-column:1 / -1"><div class="tlabel">symbolMap</div><textarea class="tinput" id="t-symbol-map" rows="3" placeholder="bitcoin=BTC-JPY&#10;ethereum=ETH-JPY">${esc(formatTraderSymbolMap(cfg.symbolMap || {}, cfg.assets || []))}</textarea></div>
         </div>
         <div class="tmeta" style="margin-top:10px">価格取得は ${cfg.priceIntervalMin} 分ごと / 通貨は ${String(cfg.vsCurrency || 'jpy').toUpperCase()} 固定です。</div>
         <div class="trow">
@@ -4568,6 +4608,8 @@ function renderTMarket() {
         </div>
       </form>
       ${blocker ? `<div class="tmeta" style="margin-top:8px;color:#c0392b">分析条件: ${esc(blocker)}</div>` : ''}
+      <div class="tmeta" style="margin-top:8px"><b>現在の価格プロバイダ:</b> ${esc(traderProviderLabel(currentProvider))} / <b>直近取得:</b> ${esc(lastFetchResult)}${fetchStatus.lastFetchAt ? ` (${esc(fmtAt(Date.parse(fetchStatus.lastFetchAt)))})` : ''}</div>
+      ${fetchStatus.lastFetchError ? `<div class="tmeta" style="margin-top:6px;color:#c0392b"><b>最後のエラー:</b> ${esc(fetchStatus.lastFetchError)}</div>` : ''}
       ${TSTATUS.marketNote ? `<div class="tmeta" style="margin-top:8px"><b>相場メモ:</b> ${esc(TSTATUS.marketNote)}</div>` : ''}
       ${renderTraderSignals(TSTATUS.latestSignals)}
     </div>
@@ -4710,6 +4752,8 @@ async function saveTConfig(ev) {
         startBalance: Number($('t-balance').value),
         vsCurrency: cfg.vsCurrency || 'jpy',
         priceIntervalMin: cfg.priceIntervalMin || 15,
+        priceProvider: $('t-provider').value,
+        symbolMap: parseTraderSymbolMap($('t-symbol-map').value),
       }),
     });
     TSTATUS = j.status || TSTATUS;

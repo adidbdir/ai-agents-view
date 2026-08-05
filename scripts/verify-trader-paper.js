@@ -15,6 +15,7 @@ function makePaths(root) {
     pricesPath: path.join(dir, 'prices.jsonl'),
     portfolioPath: path.join(dir, 'portfolio.json'),
     configPath: path.join(root, 'trader-config.json'),
+    statePath: path.join(dir, 'state.json'),
   });
 }
 
@@ -37,10 +38,17 @@ async function main() {
     priceIntervalMin: 15,
     analysisHour: 7,
     startBalance: 120000,
+    priceProvider: 'auto',
+    symbolMap: {
+      bitcoin: 'BTC-JPY',
+      ethereum: 'ETH-JPY',
+    },
   }, paths);
   assert.equal(savedConfig.enabled, true);
   assert.equal(savedConfig.startBalance, 120000);
   assert.deepEqual(savedConfig.assets, ['bitcoin', 'ethereum']);
+  assert.equal(savedConfig.priceProvider, 'auto');
+  assert.equal(savedConfig.symbolMap.bitcoin, 'BTC-JPY');
 
   const series = [];
   for (let i = 0; i < 16; i++) {
@@ -78,6 +86,74 @@ async function main() {
   assert.ok(indicators.bitcoin.rsi14 !== null);
   assert.ok(indicators.bitcoin.change24h !== null);
   assert.ok(indicators.bitcoin.change7d !== null);
+
+  let yahooCalls = 0;
+  let coingeckoCalls = 0;
+  const yahooNow = new Date('2026-08-01T00:00:00.000Z');
+  const yahooRecord = await srv._test.maybeFetchTraderPrices({
+    paths,
+    config: savedConfig,
+    now: yahooNow,
+    force: true,
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes('coingecko')) {
+        coingeckoCalls++;
+        throw new Error('fetch failed');
+      }
+      yahooCalls++;
+      assert.equal(options.headers['User-Agent'], 'Mozilla/5.0');
+      const price = String(url).includes('BTC-JPY') ? 18123456 : 512345;
+      const prevClose = String(url).includes('BTC-JPY') ? 17600000 : 500000;
+      return mockResponse({
+        chart: {
+          result: [{
+            meta: {
+              regularMarketPrice: price,
+              chartPreviousClose: prevClose,
+            },
+          }],
+        },
+      });
+    },
+  });
+  assert.equal(coingeckoCalls, 1);
+  assert.equal(yahooCalls, 2);
+  assert.equal(Number(yahooRecord.prices.bitcoin.jpy), 18123456);
+  assert.ok(Number.isFinite(Number(yahooRecord.prices.bitcoin.jpy_24h_change)));
+  const fetchState = srv.loadTraderFetchState(paths);
+  assert.equal(fetchState.currentProvider, 'yahoo');
+  assert.equal(fetchState.lastFetchOk, true);
+
+  coingeckoCalls = 0;
+  yahooCalls = 0;
+  await srv._test.maybeFetchTraderPrices({
+    paths,
+    config: savedConfig,
+    now: new Date('2026-08-01T00:05:00.000Z'),
+    force: true,
+    fetchImpl: async (url, options = {}) => {
+      if (String(url).includes('coingecko')) {
+        coingeckoCalls++;
+        throw new Error('memoized yahoo should avoid coingecko');
+      }
+      yahooCalls++;
+      assert.equal(options.headers['User-Agent'], 'Mozilla/5.0');
+      const price = String(url).includes('BTC-JPY') ? 18125000 : 513000;
+      const prevClose = String(url).includes('BTC-JPY') ? 17650000 : 501000;
+      return mockResponse({
+        chart: {
+          result: [{
+            meta: {
+              regularMarketPrice: price,
+              chartPreviousClose: prevClose,
+            },
+          }],
+        },
+      });
+    },
+  });
+  assert.equal(coingeckoCalls, 0);
+  assert.equal(yahooCalls, 2);
 
   const result = await srv.analyzeTrader({
     paths,
