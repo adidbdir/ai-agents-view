@@ -236,6 +236,58 @@
   .zone-toggle-btn.alt { background: linear-gradient(135deg, #5d7185, #7f93a7); }
   .zone-toggle-btn:disabled { opacity: .45; cursor: default; }
   .sec-title { font-size: 12px; font-weight: 800; color: var(--gray-txt); letter-spacing: .1em; margin: 14px 0 8px; }
+  .tmux-card {
+    background: #f7fbff; border: 1px solid #dce8f5; border-radius: 14px;
+    padding: 13px 13px 14px; margin-bottom: 12px;
+    box-shadow: 0 3px 10px rgba(40,60,90,.05);
+  }
+  .tmux-card.urgent {
+    background: linear-gradient(180deg, #fff6ec 0%, #fffdfa 100%);
+    border-color: #f0c79d;
+    box-shadow: 0 6px 18px rgba(208,126,39,.10);
+  }
+  .tmux-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px;
+  }
+  .tmux-title { font-size: 14px; font-weight: 800; color: var(--navy); }
+  .tmux-title .flag {
+    display: inline-block; margin-left: 7px; font-size: 10px; font-weight: 800;
+    background: #ef8b3c; color: #fff; border-radius: 999px; padding: 2px 8px; vertical-align: 2px;
+  }
+  .tmux-refresh {
+    border: none; border-radius: 10px; padding: 8px 10px; cursor: pointer; font-family: inherit;
+    font-size: 11px; font-weight: 800; background: #e7f0fb; color: #2c537f; white-space: nowrap;
+  }
+  .tmux-refresh:disabled { opacity: .5; cursor: default; }
+  .tmux-help { font-size: 11px; line-height: 1.7; color: var(--slate); margin-bottom: 10px; }
+  .tmux-help.small { margin-bottom: 0; }
+  .tmux-field { margin-bottom: 10px; }
+  .tmux-field label {
+    display: block; font-size: 10.5px; font-weight: 800; color: var(--gray-txt);
+    letter-spacing: .08em; margin-bottom: 5px;
+  }
+  .tmux-select, .tmux-input {
+    width: 100%; font-family: inherit; font-size: 13px; color: var(--navy); background: #fff;
+    border: 1px solid #d5dde6; border-radius: 11px; padding: 9px 11px;
+  }
+  .tmux-pane-meta { font-size: 11px; color: var(--slate); line-height: 1.7; margin-top: 6px; word-break: break-all; }
+  .tmux-form { display: flex; gap: 8px; align-items: stretch; }
+  .tmux-send {
+    border: none; border-radius: 11px; padding: 0 15px; cursor: pointer; font-family: inherit;
+    font-size: 12.5px; font-weight: 800; color: #fff; white-space: nowrap;
+    background: linear-gradient(135deg, #4066a8, #2fb9dd);
+  }
+  .tmux-send:disabled, .tmux-key:disabled { opacity: .45; cursor: default; }
+  .tmux-keys { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .tmux-key {
+    border: none; border-radius: 10px; padding: 8px 11px; cursor: pointer; font-family: inherit;
+    font-size: 11.5px; font-weight: 800; color: #28435e; background: #edf3f8;
+  }
+  .tmux-key.primary { background: #e2f5fb; color: #16758f; }
+  .tmux-note {
+    font-size: 11px; line-height: 1.7; color: var(--gray-txt);
+    margin-top: 9px;
+  }
 
   .runs { background: #f2f6fa; border-radius: 12px; padding: 12px; }
   .runs svg { display: block; width: 100%; }
@@ -639,6 +691,17 @@
     transition: background .15s ease;
   }
   .panel-resize:hover::before { background: rgba(255,255,255,.75); }
+  .toast-wrap {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; gap: 8px; z-index: 60; pointer-events: none;
+  }
+  .toast {
+    min-width: 180px; max-width: min(88vw, 360px);
+    background: rgba(29,43,58,.92); color: #fff; border-radius: 12px;
+    padding: 10px 14px; box-shadow: 0 8px 22px rgba(18,28,40,.25);
+    font-size: 12.5px; font-weight: 700; text-align: center;
+  }
+  .toast.err { background: rgba(192,57,43,.94); }
 
   /* ══════════ スマホ対応(〜640px)══════════ */
   @media (max-width: 640px) {
@@ -700,9 +763,12 @@
     .panel-resize { display: none; }
 
     /* iOS のフォーカス時ズームを防ぐ(入力は16px以上に) */
-    .sform textarea, .xform input, .gadd input, .hinput, .hselect, .htextarea, .tinput { font-size: 16px; }
+    .sform textarea, .xform input, .gadd input, .hinput, .hselect, .htextarea, .tinput, .tmux-select, .tmux-input { font-size: 16px; }
     .hsplit { grid-template-columns: 1fr; min-height: 0; }
     .tequity, .tgrid { grid-template-columns: 1fr; }
+    .tmux-form { flex-direction: column; }
+    .tmux-send { padding: 11px 14px; }
+    .toast-wrap { top: calc(10px + env(safe-area-inset-top, 0px)); }
 
     /* ノッチ・ブラウザ上部バーを避ける(セーフエリア対応)*/
     .panel-head { padding-top: calc(20px + env(safe-area-inset-top, 0px)); }
@@ -721,6 +787,7 @@
 </head>
 <body>
 <div id="app">
+  <div class="toast-wrap" id="toast-wrap"></div>
   <div id="sky">
     <div id="stars"></div>
     <div id="clouds"></div>
@@ -889,6 +956,8 @@ let THISTORY = { equityHistory: [], trades: [], lastAnalysis: null };
 let tBusy = false;
 let tTab = 'market';
 let tPollAt = 0;
+let TMUX_STATE = Object.create(null);
+let TOAST_SEQ = 1;
 
 /* ══════════ ユーティリティ ══════════ */
 function el(name, attrs = {}, children = []) {
@@ -918,6 +987,18 @@ function esc(s) {
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 function zoneLabel(zone) { return zone === 'auto' ? '自動化エリア' : 'ワークスペース'; }
 function zoneShortLabel(zone) { return zone === 'auto' ? '自動' : '対話'; }
+function showToast(message, kind) {
+  const wrap = $('toast-wrap');
+  if (!wrap) return;
+  const node = document.createElement('div');
+  node.className = 'toast' + (kind === 'err' ? ' err' : '');
+  node.textContent = message;
+  node.dataset.toastId = String(TOAST_SEQ++);
+  wrap.appendChild(node);
+  setTimeout(() => {
+    if (node.parentNode) node.parentNode.removeChild(node);
+  }, 2400);
+}
 function hashString(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -2756,6 +2837,7 @@ function openPanel(id) {
   if (!p) return;
   closeSPanel(); closeXPanel(); closeHPanel(); closeTPanel();
   fillPanel(p);
+  loadTmuxPanes(p);
   $('panel').classList.add('open');
 }
 function closePanel() {
@@ -2774,7 +2856,217 @@ async function saveZoneOverride(projectName, zone) {
   await tick();
 }
 
+function tmuxProjectKey(project) {
+  return project.id || project.dirName || project.name;
+}
+
+function ensureTmuxState(project) {
+  const key = tmuxProjectKey(project);
+  if (!TMUX_STATE[key]) {
+    TMUX_STATE[key] = {
+      loading: false,
+      available: null,
+      panes: [],
+      selectedPaneId: '',
+      text: '',
+      error: '',
+    };
+  }
+  return TMUX_STATE[key];
+}
+
+function tmuxKeyLabel(key) {
+  return {
+    enter: 'Enter',
+    y: 'y',
+    n: 'n',
+    esc: 'Esc',
+    up: 'Up',
+    down: 'Down',
+    1: '1',
+    2: '2',
+    3: '3',
+    tab: 'Tab',
+    'ctrl-c': 'Ctrl+C',
+  }[key] || key;
+}
+
+function formatTmuxActivity(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n <= 0) return '活動時刻不明';
+  return new Date(n * 1000).toLocaleString('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function renderTmuxSection(project, state) {
+  const urgent = project.waiting === 'approval';
+  const selected = (state.panes || []).find((pane) => pane.paneId === state.selectedPaneId) || state.panes[0] || null;
+  let body = '';
+  if (project.remote) {
+    body = '<div class="tmux-help small">リモートホストの tmux 返信は元ホスト側のダッシュボードで行ってください。</div>';
+  } else if (state.loading && state.available === null) {
+    body = '<div class="tmux-help small">tmux ペインを確認しています…</div>';
+  } else if (state.available === false) {
+    body = '<div class="tmux-help small">tmuxペインが見つかりません</div>';
+  } else if (state.error) {
+    body = `<div class="tmux-help small">${esc(state.error)}</div>`;
+  } else if (!(state.panes || []).length) {
+    body = '<div class="tmux-help small">tmuxペインが見つかりません</div>';
+  } else {
+    const options = state.panes.map((pane) => {
+      const rec = pane.recommended ? ' ★推奨' : '';
+      const active = pane.active ? ' ・ active' : '';
+      return `<option value="${esc(pane.paneId)}"${pane.paneId === state.selectedPaneId ? ' selected' : ''}>${esc(pane.target)} ・ ${esc(pane.command || 'shell')}${rec}${active}</option>`;
+    }).join('');
+    const quickKeys = ['enter', 'y', 'n', 'esc', '1', '2', '3']
+      .map((key) => `<button type="button" class="tmux-key${key === 'enter' ? ' primary' : ''}" data-tmux-key="${key}"${state.loading ? ' disabled' : ''}>${tmuxKeyLabel(key)}</button>`)
+      .join('');
+    body = `
+      <div class="tmux-field">
+        <label for="tmux-pane-select">PANE</label>
+        <select class="tmux-select" id="tmux-pane-select">${options}</select>
+        ${selected ? `<div class="tmux-pane-meta">${esc(selected.path)}<br>command: ${esc(selected.command || 'shell')} ・ 最終活動 ${esc(formatTmuxActivity(selected.lastActivity))}</div>` : ''}
+      </div>
+      <form class="tmux-form" id="tmux-form">
+        <input class="tmux-input" id="tmux-text" type="text" placeholder="テキストを送る" maxlength="2000" autocomplete="off" value="${esc(state.text)}">
+        <button class="tmux-send" id="tmux-send" type="submit"${state.loading ? ' disabled' : ''}>送信</button>
+      </form>
+      <div class="tmux-keys">${quickKeys}</div>
+      <div class="tmux-note">テキストはそのまま送って Enter を押します。承認キーは固定の許可リストのみ送信します。</div>`;
+  }
+  return `<div class="tmux-card${urgent ? ' urgent' : ''}">
+    <div class="tmux-head">
+      <div class="tmux-title">⌨️ ターミナルに返信${urgent ? '<span class="flag">承認待ち</span>' : ''}</div>
+      ${project.remote ? '' : `<button class="tmux-refresh" id="tmux-refresh" type="button"${state.loading ? ' disabled' : ''}>再読込</button>`}
+    </div>
+    <div class="tmux-help">同じマシン上でこのプロジェクトを開いている tmux ペインへ、テキストや承認キーを送ります。</div>
+    ${body}
+  </div>`;
+}
+
+function bindPanelTmuxControls(project) {
+  const state = ensureTmuxState(project);
+  const select = $('tmux-pane-select');
+  if (select) {
+    select.addEventListener('change', () => {
+      state.selectedPaneId = select.value;
+      fillPanel(project);
+    });
+  }
+
+  const input = $('tmux-text');
+  if (input) {
+    input.addEventListener('input', () => { state.text = input.value; });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const form = $('tmux-form');
+        if (form) form.requestSubmit();
+      }
+    });
+  }
+
+  const form = $('tmux-form');
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = state.text.trim();
+      if (!text || state.loading) return;
+      sendTmuxAction(project, { text });
+    });
+  }
+
+  const refresh = $('tmux-refresh');
+  if (refresh) refresh.addEventListener('click', () => { loadTmuxPanes(project, true); });
+
+  document.querySelectorAll('[data-tmux-key]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.tmuxKey;
+      if (!key || state.loading) return;
+      sendTmuxAction(project, { key });
+    });
+  });
+}
+
+async function loadTmuxPanes(project, force) {
+  if (project.remote) return;
+  const state = ensureTmuxState(project);
+  if (state.loading) return;
+  if (!force && state.available !== null) return;
+  state.loading = true;
+  state.error = '';
+  fillPanel(project);
+  try {
+    const r = await fetch('/api/tmux/panes?project=' + encodeURIComponent(project.name));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    state.available = !!j.available;
+    state.panes = Array.isArray(j.panes) ? j.panes : [];
+    if (!state.panes.some((pane) => pane.paneId === state.selectedPaneId)) {
+      const recommended = state.panes.find((pane) => pane.recommended) || state.panes[0] || null;
+      state.selectedPaneId = recommended ? recommended.paneId : '';
+    }
+  } catch (e) {
+    state.available = true;
+    state.panes = [];
+    state.selectedPaneId = '';
+    state.error = 'tmux ペインの取得に失敗しました: ' + e.message;
+  } finally {
+    state.loading = false;
+    const current = (DATA.projects || []).find((x) => (x.id || x.dirName) === tmuxProjectKey(project));
+    if (current && selectedId === tmuxProjectKey(project)) fillPanel(current);
+  }
+}
+
+async function sendTmuxAction(project, payload) {
+  const state = ensureTmuxState(project);
+  const paneId = state.selectedPaneId;
+  if (!paneId) {
+    showToast('送信先のペインを選択してください', 'err');
+    return;
+  }
+  state.loading = true;
+  fillPanel(project);
+  try {
+    const body = { paneId };
+    if (payload.text) body.text = payload.text;
+    if (payload.key) body.key = payload.key;
+    const r = await fetch('/api/tmux/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    if (payload.text) state.text = '';
+    showToast('送信しました');
+  } catch (e) {
+    showToast('送信できませんでした: ' + e.message, 'err');
+  } finally {
+    state.loading = false;
+    const current = (DATA.projects || []).find((x) => (x.id || x.dirName) === tmuxProjectKey(project));
+    if (current && selectedId === tmuxProjectKey(project)) fillPanel(current);
+  }
+}
+
 function fillPanel(p) {
+  const state = ensureTmuxState(p);
+  const activeEl = document.activeElement;
+  const focusInfo = (activeEl && (activeEl.id === 'tmux-text' || activeEl.id === 'tmux-pane-select'))
+    ? {
+      id: activeEl.id,
+      start: typeof activeEl.selectionStart === 'number' ? activeEl.selectionStart : null,
+      end: typeof activeEl.selectionEnd === 'number' ? activeEl.selectionEnd : null,
+    }
+    : null;
   $('p-name').textContent = p.name + (p.remote ? `  💻 ${p.host}` : '');
   $('p-path').textContent = (p.remote ? `${p.host}: ` : '') + (p.cwd || p.dirName);
   const stLabel = { active: '稼働中', recent: '直近実行', idle: '待機中' }[p.status];
@@ -2787,6 +3079,7 @@ function fillPanel(p) {
 
   const nextZone = p.zone === 'auto' ? 'interactive' : 'auto';
   let html = '';
+  html += renderTmuxSection(p, state);
   html += `<div class="panel-zone">
     <div class="meta">
       <div class="k">ZONE</div>
@@ -2822,6 +3115,16 @@ function fillPanel(p) {
   }
   if (!p.sessions.length) html += '<div class="empty">セッションがありません</div>';
   $('p-body').innerHTML = html;
+  bindPanelTmuxControls(p);
+  if (focusInfo) {
+    const node = $(focusInfo.id);
+    if (node) {
+      node.focus();
+      if (focusInfo.id === 'tmux-text' && focusInfo.start !== null && focusInfo.end !== null && node.setSelectionRange) {
+        node.setSelectionRange(focusInfo.start, focusInfo.end);
+      }
+    }
+  }
 }
 
 async function toggleProjectZone(projectName, zone) {

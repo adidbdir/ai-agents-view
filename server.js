@@ -12,7 +12,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4370;
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
@@ -39,6 +39,20 @@ const TRADER_ACTIONS = new Set(['buy', 'sell', 'hold']);
 const SESSION_ZONE_AUTO = 'auto';
 const SESSION_ZONE_INTERACTIVE = 'interactive';
 const AUTO_PROMPT_CHARS = 220;
+const TMUX_PANE_FORMAT = '#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}\t#{window_activity}';
+const TMUX_ALLOWED_KEYS = {
+  enter: 'Enter',
+  y: 'y',
+  n: 'n',
+  esc: 'Escape',
+  up: 'Up',
+  down: 'Down',
+  1: '1',
+  2: '2',
+  3: '3',
+  tab: 'Tab',
+  'ctrl-c': 'C-c',
+};
 const DEFAULT_TRADER_PATHS = {
   dir: TRADER_DIR,
   pricesPath: TRADER_PRICES_PATH,
@@ -287,6 +301,127 @@ function classifySessionZone(session) {
   if (session.cwd && isSubPath(os.tmpdir(), session.cwd)) return SESSION_ZONE_AUTO;
   if (session.promptCount === 1 && session.firstPromptChars >= AUTO_PROMPT_CHARS) return SESSION_ZONE_AUTO;
   return SESSION_ZONE_INTERACTIVE;
+}
+
+function normalizePathForMatch(inputPath) {
+  if (!inputPath) return null;
+  try {
+    return fs.realpathSync.native(inputPath);
+  } catch {
+    try {
+      return fs.realpathSync(inputPath);
+    } catch {
+      return path.resolve(inputPath);
+    }
+  }
+}
+
+function execFileText(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { encoding: 'utf8', maxBuffer: 1024 * 1024, ...options }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+function isTmuxCommandMissing(error) {
+  return !!(error && error.code === 'ENOENT');
+}
+
+function isTmuxPermissionError(error) {
+  const message = String((error && error.stderr) || (error && error.message) || '');
+  return /operation not permitted|permission denied/i.test(message);
+}
+
+function isTmuxNoServerError(error) {
+  const message = String((error && error.stderr) || (error && error.message) || '');
+  return /no server running/i.test(message);
+}
+
+async function listAllTmuxPanes() {
+  try {
+    const { stdout } = await execFileText('tmux', ['list-panes', '-a', '-F', TMUX_PANE_FORMAT]);
+    const panes = stdout.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [paneId, target, command, panePath, active, lastActivity] = line.split('\t');
+        const activityNum = Number(lastActivity);
+        return {
+          paneId,
+          target,
+          command: command || '',
+          path: panePath || '',
+          active: active === '1',
+          lastActivity: Number.isFinite(activityNum) ? activityNum : 0,
+          normalizedPath: normalizePathForMatch(panePath),
+        };
+      })
+      .filter((pane) => /^%\d+$/.test(pane.paneId));
+    return { available: true, panes };
+  } catch (error) {
+    if (isTmuxCommandMissing(error) || isTmuxPermissionError(error)) return { available: false, panes: [] };
+    if (isTmuxNoServerError(error)) return { available: true, panes: [] };
+    throw error;
+  }
+}
+
+function tmuxCommandRank(command) {
+  return /^(claude|node)$/i.test(String(command || '').trim()) ? 1 : 0;
+}
+
+async function listProjectTmuxPanes(projectName) {
+  const name = String(projectName || '').trim();
+  const tmux = await listAllTmuxPanes();
+  if (!tmux.available || !name) return { available: tmux.available, panes: [] };
+
+  const projectPaths = new Set(
+    (collect().projects || [])
+      .filter((project) => !project.remote && project.name === name && project.cwd)
+      .map((project) => normalizePathForMatch(project.cwd))
+      .filter(Boolean)
+  );
+  if (!projectPaths.size) return { available: true, panes: [] };
+
+  const panes = tmux.panes
+    .filter((pane) => pane.normalizedPath && projectPaths.has(pane.normalizedPath))
+    .sort((a, b) => (tmuxCommandRank(b.command) - tmuxCommandRank(a.command))
+      || ((b.lastActivity || 0) - (a.lastActivity || 0)))
+    .map((pane, index) => ({
+      paneId: pane.paneId,
+      target: pane.target,
+      command: pane.command,
+      path: pane.path,
+      active: pane.active,
+      lastActivity: pane.lastActivity,
+      recommended: index === 0,
+    }));
+  return { available: true, panes };
+}
+
+function sanitizeTmuxPaneId(value) {
+  const paneId = String(value || '').trim();
+  return /^%\d+$/.test(paneId) ? paneId : null;
+}
+
+function sanitizeTmuxKey(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return TMUX_ALLOWED_KEYS[key] ? key : null;
+}
+
+async function sendTmuxText(paneId, text) {
+  await execFileText('tmux', ['send-keys', '-t', paneId, '-l', '--', text]);
+  await execFileText('tmux', ['send-keys', '-t', paneId, 'Enter']);
+}
+
+async function sendTmuxKey(paneId, key) {
+  await execFileText('tmux', ['send-keys', '-t', paneId, TMUX_ALLOWED_KEYS[key]]);
 }
 
 function chooseProjectZone(sessions) {
@@ -3990,6 +4125,52 @@ const server = http.createServer((req, res) => {
         .catch((e) => sendJson(res, 400, { ok: false, error: String(e.message) }));
       return;
     }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/tmux/panes') {
+    listProjectTmuxPanes(url.searchParams.get('project') || '')
+      .then((result) => sendJson(res, 200, result))
+      .catch((e) => sendJson(res, 500, { available: true, panes: [], error: String(e.message) }));
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/tmux/send') {
+    readJsonBody(req)
+      .then(async (body) => {
+        const paneId = sanitizeTmuxPaneId(body.paneId);
+        const rawText = body.text;
+        const hasText = typeof rawText === 'string' && rawText.length > 0;
+        const hasKeyField = body.key !== undefined && body.key !== null && body.key !== '';
+        const key = sanitizeTmuxKey(body.key);
+        if (!paneId) throw new Error('paneId は %数字 形式で指定してください');
+        if (hasKeyField && !key) throw new Error('許可されていない key です');
+        if ((hasText ? 1 : 0) + (key ? 1 : 0) !== 1) {
+          throw new Error('text か key のどちらか一方を指定してください');
+        }
+
+        try {
+          if (hasText) {
+            if (/[\r\n]/.test(rawText)) throw new Error('text に改行は含められません');
+            await sendTmuxText(paneId, rawText);
+          } else {
+            await sendTmuxKey(paneId, key);
+          }
+        } catch (error) {
+          if (isTmuxCommandMissing(error) || isTmuxPermissionError(error)) {
+            sendJson(res, 503, { ok: false, error: 'tmux を利用できません' });
+            return;
+          }
+          if (isTmuxNoServerError(error) || /can['’]t find pane/i.test(String(error.stderr || error.message || ''))) {
+            sendJson(res, 404, { ok: false, error: '指定した tmux ペインが見つかりません' });
+            return;
+          }
+          throw error;
+        }
+
+        sendJson(res, 200, { ok: true });
+      })
+      .catch((e) => sendJson(res, 400, { ok: false, error: String(e.message) }));
+    return;
   }
 
   if (url.pathname === '/api/data') {
