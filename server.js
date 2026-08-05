@@ -4387,7 +4387,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/trader/analyze') {
     Promise.resolve()
       .then(async () => {
-        const result = await analyzeTrader();
+        // 手動実行は遊休判定と5h予算を免除(プロバイダ/実行中のブロッカーは維持)
+        const guard = getTraderRuntimeGuard();
+        const blockers = guard.blockers.filter((b) => !b.startsWith('遊休判定') && !b.startsWith('直近5時間トークン予算'));
+        const result = await analyzeTrader({ runtime: { ...guard, blockers, canAnalyze: !blockers.length } });
         sendJson(res, 200, result);
       })
       .catch((e) => sendJson(res, 500, { error: String(e.message) }));
