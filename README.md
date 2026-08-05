@@ -34,6 +34,11 @@ Claude Code / AI エージェントのセッションを、アイソメトリッ
   - Claude Code の**直近5時間トークン使用量**と**直近の遊休時間**を見て、サブスク枠の余りを使える時だけ最古の待機ジョブを自動実行
   - ジョブ種別は **記事ドラフト / SNS導線 / 収益化ネタ調査 / 自由プロンプト**。成果物は Markdown で `data/hustler/outputs/` に保存され、新着があるとキャラに「!」バッジ
   - 収益記録(日付・金額・メモ)も同じパネルで管理でき、月次合計を簡易グラフで確認できる
+- **動画職人(任意)** — 自動化エリアの「動画職人」(🎬)をクリックすると、ローカル MiniMax H3 でショート動画を作る制作パネルが開く
+  - Claude CLI / Anthropic API で **タイトル / 概要欄 / 3シーン前後のJSON台本**を生成し、ComfyUI 上の **MiniMax H3** へ直列投入
+  - 各シーンは **H3 ネイティブ音声 + 日本語字幕焼き込み**で生成し、`ffmpeg` の concat demuxer で `data/creator/videos/*.mp4` に連結保存
+  - 探検家の新着レポートを topic キューへ自動投入でき、審査(score)合格時だけ YouTube Data API へ自動投稿(未取得スコープ時は再認証を案内)
+  - 参照画像 `assets/h3/character_ref.png` があれば **ref2va** に切り替えてキャラ固定、無ければ t2va/fl2va で生成
 - **トレーダー猫(任意 / ペーパートレード専用)** — オフィス左手前の「トレーダー・相場」(📈)をクリックすると、暗号資産の**ペーパートレード(仮想資金)**パネルが開く
   - 実売買は行わず、CoinGecko の無料 API で取得した価格を `data/trader/prices.jsonl` に保存し、SMA / RSI / 24h・7d 変化率を表示
   - 分析は Claude CLI 優先(未設定なら Anthropic API)で、商人と同じ**遊休判定 / 直近5時間トークン予算**を尊重して 1 日 1 回だけ実行
@@ -132,6 +137,7 @@ tmux 返信は**各ホストのローカル tmux**だけを操作します。集
 5. ダッシュボード左上「📅 今日の予定」→「Google と連携する」→ ブラウザで許可
 
 - スコープは `calendar.readonly`(予定は読み取りのみ)と `tasks`(タスクの完了切替・追加のため読み書き)です
+- 動画職人の YouTube 投稿を使う場合は、同じ OAuth 連携で `youtube.upload` スコープも一緒に取得します。既存トークンにこのスコープが無い場合、投稿時に「再認証が必要です(⚙️→Googleと連携)」と表示されます
 - トークンは `google-token.json` としてローカルにのみ保存されます(`google-credentials.json` と共に gitignore 済み)
 - 連携の許可操作は、サーバーが動いている PC のブラウザ(`http://localhost:4370`)から行ってください(OAuth のリダイレクト先が localhost のため)
 - 連携を解除するには `google-token.json` を削除してください
@@ -140,6 +146,7 @@ tmux 返信は**各ホストのローカル tmux**だけを操作します。集
 |---|---|
 | Calendar API (`calendars/primary/events`) | 今日 0:00〜24:00 の予定(読み取りのみ) |
 | Tasks API (`users/@me/lists`, `lists/{id}/tasks`) | タスク一覧・完了切替・追加(未完了 + 今日完了分を表示) |
+| YouTube Data API (`videos.insert`) | 動画職人の mp4 を resumable upload で投稿 |
 
 ## 秘書アシスタント(任意)
 
@@ -230,6 +237,42 @@ ANTHROPIC_API_KEY=sk-ant-... node server.js        # モデル変更は SECRETAR
 - 価格サマリと指標(SMA 24h/7d, RSI14, 24h/7d 変化率)をもとに `buy / sell / hold` の JSON シグナルを受け取り、`data/trader/portfolio.json` に仮想ポートフォリオを保存します。
 - 直近5時間トークン予算と遊休判定は商人エージェントと同じロジックを再利用します。商人や探検家の実行中は分析しません。
 - UI では「相場 / ポートフォリオ / 取引履歴」の 3 タブで、最新価格・損益・equity カーブ・売買根拠を確認できます。
+
+## 動画職人(ローカル H3)(任意)
+
+動画職人は **ComfyUI 0.30 + MiniMax H3** がローカルで動いている前提の機能です。既定設定は `creator-config.json` に保存されます。
+
+```json
+{
+  "enabled": false,
+  "comfyUrl": "http://127.0.0.1:8188",
+  "dailyLimit": 2,
+  "sceneCount": 3,
+  "sceneSeconds": 5,
+  "resolution": "768x1344",
+  "draftResolution": "512x896",
+  "qualityThreshold": 70,
+  "autoFromExplorer": true,
+  "publish": {
+    "enabled": false,
+    "privacyStatus": "public",
+    "categoryId": "28",
+    "disclosureText": "この動画はAIによって生成されています。"
+  }
+}
+```
+
+- 実行順は **台本生成 → H3 シーン生成(直列) → mp4 連結 → 審査 → YouTube 投稿** です
+- H3 ワークフローは `assets/h3/` のテンプレートと `h3_submit.py` と同じノード列を使います
+  - `CLIPLoader device:"cpu"`
+  - `24fps`
+  - `SamplerCustomAdvanced + res_multistep + simple + 20steps`
+  - `VAEDecode + VAEDecodeAudio -> CreateVideo -> SaveVideo`
+- 1シーンのフレーム数は **17k+5** グリッドへ自動スナップします
+- `assets/h3/character_ref.png` を置くと `MiniMaxH3ReferenceToVideo(ref2va)` を使い、同じキャラを固定しやすくします
+- 生成済み動画は `data/creator/videos/{id}.mp4` とメタデータ JSON に保存されます
+- 投稿時は概要欄の末尾へ **AI 生成開示文言** を必ず追記します
+- `containsSyntheticMedia: true` を付けて YouTube に送ります
 
 ## データソース
 

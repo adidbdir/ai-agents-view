@@ -24,18 +24,29 @@ const HUSTLER_OUTPUTS_DIR = path.join(HUSTLER_DIR, 'outputs');
 const HUSTLER_JOBS_PATH = path.join(HUSTLER_DIR, 'jobs.json');
 const HUSTLER_REVENUE_PATH = path.join(HUSTLER_DIR, 'revenue.json');
 const HUSTLER_CONFIG_PATH = path.join(__dirname, 'hustler-config.json');
+const CREATOR_DIR = path.join(DATA_DIR, 'creator');
+const CREATOR_VIDEOS_DIR = path.join(CREATOR_DIR, 'videos');
+const CREATOR_WORK_DIR = path.join(CREATOR_DIR, 'work');
+const CREATOR_JOBS_PATH = path.join(CREATOR_DIR, 'jobs.json');
+const CREATOR_CONFIG_PATH = path.join(__dirname, 'creator-config.json');
 const TRADER_DIR = path.join(DATA_DIR, 'trader');
 const TRADER_PRICES_PATH = path.join(TRADER_DIR, 'prices.jsonl');
 const TRADER_PORTFOLIO_PATH = path.join(TRADER_DIR, 'portfolio.json');
 const TRADER_CONFIG_PATH = path.join(__dirname, 'trader-config.json');
 const TRADER_STATE_PATH = path.join(TRADER_DIR, 'state.json');
 const ZONE_OVERRIDES_PATH = path.join(__dirname, 'zone-overrides.json');
+const CREATOR_REF_IMAGE_PATH = path.join(__dirname, 'assets', 'h3', 'character_ref.png');
 const HUSTLER_WINDOW_MS = 5 * 60 * 60 * 1000;
 const HUSTLER_CHECK_MS = 10 * 60 * 1000;
 const HUSTLER_TOKEN_HEADROOM = 120000;
 const HUSTLER_JOB_TYPES = new Set(['article_draft', 'affiliate_article', 'sns_pack', 'idea_research', 'custom']);
 const HUSTLER_REVIEW_JOB_TYPES = new Set(['article_draft', 'affiliate_article']);
 const HUSTLER_PUBLISH_TARGETS = new Set(['zenn', 'generic', 'none']);
+const CREATOR_PRIVACY_STATUSES = new Set(['public', 'private', 'unlisted']);
+const CREATOR_JOB_STATUSES = new Set(['pending', 'scripting', 'rendering', 'reviewing', 'approved', 'pending_review', 'publishing', 'published', 'error']);
+const CREATOR_RESTARTABLE_STATUSES = new Set(['scripting', 'rendering', 'reviewing', 'publishing']);
+const CREATOR_UNFINISHED_STATUSES = new Set(['pending', 'scripting', 'rendering', 'reviewing', 'approved', 'pending_review', 'publishing']);
+const YOUTUBE_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/youtube.upload';
 const TRADER_ACTIONS = new Set(['buy', 'sell', 'hold']);
 const SESSION_ZONE_AUTO = 'auto';
 const SESSION_ZONE_INTERACTIVE = 'interactive';
@@ -595,7 +606,7 @@ function collectAll() {
  *   3. ダッシュボードの「Google と連携」→ ブラウザで許可 → google-token.json に保存
  * トークン・認証情報はこのフォルダ内にのみ保存され、Google 以外への送信はない。
  */
-const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks';
+const GOOGLE_SCOPES = `https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks ${YOUTUBE_UPLOAD_SCOPE}`;
 const CRED_PATH = path.join(__dirname, 'google-credentials.json');
 const TOKEN_PATH = path.join(__dirname, 'google-token.json');
 
@@ -802,6 +813,24 @@ const DEFAULT_HUSTLER_CONFIG = {
   },
 };
 
+const DEFAULT_CREATOR_CONFIG = {
+  enabled: false,
+  comfyUrl: 'http://127.0.0.1:8188',
+  dailyLimit: 2,
+  sceneCount: 3,
+  sceneSeconds: 5,
+  resolution: '768x1344',
+  draftResolution: '512x896',
+  qualityThreshold: 70,
+  autoFromExplorer: true,
+  publish: {
+    enabled: false,
+    privacyStatus: 'public',
+    categoryId: '28',
+    disclosureText: 'この動画はAIによって生成されています。',
+  },
+};
+
 const DEFAULT_TRADER_CONFIG = {
   enabled: false,
   assets: ['bitcoin', 'ethereum'],
@@ -827,6 +856,7 @@ const TRADER_PRICE_PROVIDERS = new Set(['auto', 'coingecko', 'yahoo']);
 const TRADER_PROVIDER_MEMO_MS = 60 * 60 * 1000;
 
 let hustlerRunning = false; // 多重実行防止(手動 + 定期実行で共有)
+let creatorRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 let traderRunning = false; // 多重実行防止(手動 + 定期実行で共有)
 const HUSTLER_JOB_STATUSES = new Set(['pending', 'running', 'evaluating', 'revising', 'approved', 'rejected', 'published', 'error']);
 const HUSTLER_RESTARTABLE_STATUSES = new Set(['running', 'evaluating', 'revising']);
@@ -845,8 +875,78 @@ function ensureHustlerStorage() {
   }
 }
 
+function ensureCreatorStorage() {
+  ensureDir(CREATOR_DIR);
+  ensureDir(CREATOR_VIDEOS_DIR);
+  ensureDir(CREATOR_WORK_DIR);
+  if (!fs.existsSync(CREATOR_JOBS_PATH)) fs.writeFileSync(CREATOR_JOBS_PATH, '[]\n');
+  if (!fs.existsSync(CREATOR_CONFIG_PATH)) {
+    fs.writeFileSync(CREATOR_CONFIG_PATH, JSON.stringify(DEFAULT_CREATOR_CONFIG, null, 2) + '\n');
+  }
+}
+
 function traderPaths(paths = null) {
   return { ...DEFAULT_TRADER_PATHS, ...(paths || {}) };
+}
+
+function sanitizeCreatorResolution(value, fallback) {
+  const m = String(value || '').trim().match(/^(\d{2,5})x(\d{2,5})$/i);
+  if (!m) return fallback;
+  const width = Math.max(32, Math.min(4096, Math.round(Number(m[1]) || 0)));
+  const height = Math.max(32, Math.min(4096, Math.round(Number(m[2]) || 0)));
+  if (!width || !height) return fallback;
+  return `${width}x${height}`;
+}
+
+function parseCreatorResolution(value, fallback = DEFAULT_CREATOR_CONFIG.resolution) {
+  const safe = sanitizeCreatorResolution(value, fallback);
+  const [width, height] = safe.split('x').map((n) => Number(n));
+  return { width, height, value: safe };
+}
+
+function sanitizeCreatorPublishConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    enabled: !!src.enabled,
+    privacyStatus: CREATOR_PRIVACY_STATUSES.has(src.privacyStatus) ? src.privacyStatus : DEFAULT_CREATOR_CONFIG.publish.privacyStatus,
+    categoryId: typeof src.categoryId === 'string' && src.categoryId.trim()
+      ? src.categoryId.trim().replace(/[^\d]/g, '').slice(0, 12) || DEFAULT_CREATOR_CONFIG.publish.categoryId
+      : DEFAULT_CREATOR_CONFIG.publish.categoryId,
+    disclosureText: typeof src.disclosureText === 'string' && src.disclosureText.trim()
+      ? src.disclosureText.trim().slice(0, 300)
+      : DEFAULT_CREATOR_CONFIG.publish.disclosureText,
+  };
+}
+
+function sanitizeCreatorConfig(input) {
+  const src = (input && typeof input === 'object') ? input : {};
+  return {
+    enabled: !!src.enabled,
+    comfyUrl: typeof src.comfyUrl === 'string' && /^https?:\/\//.test(src.comfyUrl.trim())
+      ? src.comfyUrl.trim().replace(/\/+$/, '')
+      : DEFAULT_CREATOR_CONFIG.comfyUrl,
+    dailyLimit: Math.max(1, Math.min(24, Math.round(Number(src.dailyLimit) || DEFAULT_CREATOR_CONFIG.dailyLimit))),
+    sceneCount: Math.max(1, Math.min(8, Math.round(Number(src.sceneCount) || DEFAULT_CREATOR_CONFIG.sceneCount))),
+    sceneSeconds: Math.max(2, Math.min(15, Math.round(Number(src.sceneSeconds) || DEFAULT_CREATOR_CONFIG.sceneSeconds))),
+    resolution: sanitizeCreatorResolution(src.resolution, DEFAULT_CREATOR_CONFIG.resolution),
+    draftResolution: sanitizeCreatorResolution(src.draftResolution, DEFAULT_CREATOR_CONFIG.draftResolution),
+    qualityThreshold: Math.max(0, Math.min(100, Math.round(Number(src.qualityThreshold) || DEFAULT_CREATOR_CONFIG.qualityThreshold))),
+    autoFromExplorer: src.autoFromExplorer !== false,
+    publish: sanitizeCreatorPublishConfig({ ...DEFAULT_CREATOR_CONFIG.publish, ...(src.publish || {}) }),
+  };
+}
+
+function loadCreatorConfig() {
+  ensureCreatorStorage();
+  const stored = readJsonFileSafe(CREATOR_CONFIG_PATH, DEFAULT_CREATOR_CONFIG);
+  return sanitizeCreatorConfig({ ...DEFAULT_CREATOR_CONFIG, ...stored });
+}
+
+function saveCreatorConfig(config) {
+  ensureCreatorStorage();
+  const clean = sanitizeCreatorConfig(config);
+  fs.writeFileSync(CREATOR_CONFIG_PATH, JSON.stringify(clean, null, 2) + '\n');
+  return clean;
 }
 
 function sanitizeTraderAssetIds(items) {
@@ -1198,6 +1298,259 @@ function appendStateHistory(history, state, note = '', at = null) {
     note: typeof note === 'string' ? note.slice(0, 240) : '',
   });
   return clean;
+}
+
+function alignCreatorFrameCount(frameCount) {
+  let n = Math.max(5, Math.round(Number(frameCount) || 5));
+  while (n % 17 !== 5) n++;
+  return n;
+}
+
+function secondsToCreatorFrameCount(seconds) {
+  return alignCreatorFrameCount(Math.round(Math.max(0.25, Number(seconds) || 0) * 24));
+}
+
+function normalizeCreatorState(state, fallback = 'pending') {
+  return CREATOR_JOB_STATUSES.has(state) ? state : fallback;
+}
+
+function normalizeCreatorStateHistory(history, fallbackState = 'pending', fallbackAt = null) {
+  const out = [];
+  for (const item of Array.isArray(history) ? history : []) {
+    if (!item || typeof item !== 'object') continue;
+    out.push({
+      state: normalizeCreatorState(item.state, fallbackState),
+      at: typeof item.at === 'string' ? item.at : (fallbackAt || new Date().toISOString()),
+      note: typeof item.note === 'string' ? item.note.slice(0, 240) : '',
+    });
+  }
+  return out;
+}
+
+function appendCreatorStateHistory(history, state, note = '', at = null) {
+  const nextAt = at || new Date().toISOString();
+  const clean = normalizeCreatorStateHistory(history, state, nextAt);
+  clean.push({
+    state: normalizeCreatorState(state),
+    at: nextAt,
+    note: typeof note === 'string' ? note.slice(0, 240) : '',
+  });
+  return clean;
+}
+
+function creatorVideoMetaPath(videoId) {
+  return path.join(CREATOR_VIDEOS_DIR, `${videoId}.json`);
+}
+
+function creatorVideoFilePath(videoId) {
+  return path.join(CREATOR_VIDEOS_DIR, `${videoId}.mp4`);
+}
+
+function normalizeCreatorScene(scene, fallbackCharacter = '') {
+  const src = (scene && typeof scene === 'object') ? scene : {};
+  const visualPrompt = typeof src.visualPrompt === 'string' ? src.visualPrompt.trim().slice(0, 4000) : '';
+  const dialogue = typeof src.dialogue === 'string' ? src.dialogue.trim().slice(0, 280) : '';
+  const caption = typeof src.caption === 'string' ? src.caption.trim().slice(0, 120) : '';
+  const withCharacter = fallbackCharacter && !visualPrompt.toLowerCase().includes(fallbackCharacter.toLowerCase())
+    ? `${fallbackCharacter}. ${visualPrompt}`.trim()
+    : visualPrompt;
+  return {
+    visualPrompt: withCharacter,
+    dialogue,
+    caption,
+  };
+}
+
+function normalizeCreatorScript(script, fallbackCharacter = '') {
+  const src = (script && typeof script === 'object') ? script : {};
+  return {
+    title: typeof src.title === 'string' ? src.title.trim().slice(0, 120) : '',
+    description: typeof src.description === 'string' ? src.description.trim().slice(0, 5000) : '',
+    tags: uniqStrings(src.tags, 15, 50),
+    scenes: (Array.isArray(src.scenes) ? src.scenes : []).map((scene) => normalizeCreatorScene(scene, fallbackCharacter)).filter((scene) => scene.visualPrompt || scene.dialogue || scene.caption),
+  };
+}
+
+function normalizeCreatorReview(input) {
+  if (!input || typeof input !== 'object') return null;
+  const scoreNum = Number(input.score);
+  return {
+    score: Number.isFinite(scoreNum) ? Math.max(0, Math.min(100, Math.round(scoreNum))) : null,
+    verdict: typeof input.verdict === 'string' ? input.verdict.trim().slice(0, 40) : '',
+    strengths: uniqStrings(input.strengths, 8, 240),
+    issues: uniqStrings(input.issues, 8, 240),
+    fixInstructions: typeof input.fixInstructions === 'string' ? input.fixInstructions.trim().slice(0, 2000) : '',
+  };
+}
+
+function normalizeCreatorJob(job) {
+  if (!job || typeof job !== 'object') return null;
+  const createdAt = typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString();
+  const character = creatorCharacterPrompt();
+  const script = normalizeCreatorScript(job.script, character);
+  const review = normalizeCreatorReview(job.review);
+  return {
+    id: typeof job.id === 'string' ? job.id : makeId('cjob'),
+    topic: typeof job.topic === 'string' ? job.topic.trim().slice(0, 300) : '',
+    source: typeof job.source === 'string' ? job.source.trim().slice(0, 80) : '',
+    status: normalizeCreatorState(job.status, 'pending'),
+    createdAt,
+    startedAt: typeof job.startedAt === 'string' ? job.startedAt : null,
+    finishedAt: typeof job.finishedAt === 'string' ? job.finishedAt : null,
+    stateHistory: normalizeCreatorStateHistory(job.stateHistory, job.status || 'pending', createdAt),
+    videoId: typeof job.videoId === 'string' ? job.videoId : null,
+    currentScene: Math.max(0, Math.min(99, Math.round(Number(job.currentScene) || 0))),
+    sceneCount: Math.max(0, Math.min(99, Math.round(Number(job.sceneCount) || 0))),
+    error: typeof job.error === 'string' ? job.error.slice(0, 500) : null,
+    script,
+    score: review && review.score != null ? review.score : (Number.isFinite(Number(job.score)) ? Math.max(0, Math.min(100, Math.round(Number(job.score)))) : null),
+    review,
+    publishError: typeof job.publishError === 'string' ? job.publishError.slice(0, 500) : null,
+    publishedAt: typeof job.publishedAt === 'string' ? job.publishedAt : null,
+    youtubeVideoId: typeof job.youtubeVideoId === 'string' ? job.youtubeVideoId.slice(0, 40) : null,
+    youtubeUrl: typeof job.youtubeUrl === 'string' ? job.youtubeUrl.slice(0, 300) : null,
+  };
+}
+
+function transitionCreatorJob(job, state, extra = {}, note = '') {
+  const nextState = normalizeCreatorState(state, job.status || 'pending');
+  const at = extra.finishedAt || extra.startedAt || new Date().toISOString();
+  return normalizeCreatorJob({
+    ...job,
+    ...extra,
+    status: nextState,
+    stateHistory: appendCreatorStateHistory(extra.stateHistory != null ? extra.stateHistory : job.stateHistory, nextState, note, at),
+  });
+}
+
+function loadCreatorJobs() {
+  ensureCreatorStorage();
+  const arr = readJsonFileSafe(CREATOR_JOBS_PATH, []);
+  return Array.isArray(arr) ? arr.map(normalizeCreatorJob).filter(Boolean) : [];
+}
+
+function saveCreatorJobs(jobs) {
+  ensureCreatorStorage();
+  fs.writeFileSync(CREATOR_JOBS_PATH, JSON.stringify(jobs, null, 2) + '\n');
+}
+
+function updateCreatorJobById(jobId, updater) {
+  const jobs = loadCreatorJobs();
+  const idx = jobs.findIndex((job) => job.id === jobId);
+  if (idx < 0) return null;
+  jobs[idx] = normalizeCreatorJob(updater(jobs[idx]));
+  saveCreatorJobs(jobs);
+  return jobs[idx];
+}
+
+function normalizeCreatorVideoRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const createdAt = typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString();
+  const id = typeof record.id === 'string' ? record.id : makeId('cvid');
+  const character = creatorCharacterPrompt();
+  const script = normalizeCreatorScript(record.script, character);
+  const review = normalizeCreatorReview(record.review);
+  const publish = (record.publish && typeof record.publish === 'object') ? record.publish : {};
+  return {
+    id,
+    jobId: typeof record.jobId === 'string' ? record.jobId : null,
+    createdAt,
+    updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : createdAt,
+    state: normalizeCreatorState(record.state, 'pending'),
+    title: typeof record.title === 'string' ? record.title.trim().slice(0, 120) : script.title,
+    description: typeof record.description === 'string' ? record.description.trim().slice(0, 5000) : script.description,
+    tags: uniqStrings(record.tags || script.tags, 15, 50),
+    topic: typeof record.topic === 'string' ? record.topic.trim().slice(0, 300) : '',
+    score: review && review.score != null ? review.score : (Number.isFinite(Number(record.score)) ? Math.max(0, Math.min(100, Math.round(Number(record.score)))) : null),
+    review,
+    script,
+    sceneCount: Math.max(0, Math.min(99, Math.round(Number(record.sceneCount) || script.scenes.length || 0))),
+    sceneSeconds: Math.max(0, Math.min(60, Math.round(Number(record.sceneSeconds) || 0))),
+    resolution: sanitizeCreatorResolution(record.resolution, DEFAULT_CREATOR_CONFIG.resolution),
+    fileName: `${id}.mp4`,
+    hasFile: !!record.hasFile,
+    currentScene: Math.max(0, Math.min(99, Math.round(Number(record.currentScene) || 0))),
+    stateHistory: normalizeCreatorStateHistory(record.stateHistory, record.state || 'pending', createdAt),
+    error: typeof record.error === 'string' ? record.error.slice(0, 500) : null,
+    publish: {
+      attemptedAt: typeof publish.attemptedAt === 'string' ? publish.attemptedAt : null,
+      publishedAt: typeof publish.publishedAt === 'string' ? publish.publishedAt : null,
+      videoId: typeof publish.videoId === 'string' ? publish.videoId.slice(0, 40) : null,
+      url: typeof publish.url === 'string' ? publish.url.slice(0, 300) : null,
+      privacyStatus: CREATOR_PRIVACY_STATUSES.has(publish.privacyStatus) ? publish.privacyStatus : DEFAULT_CREATOR_CONFIG.publish.privacyStatus,
+      error: typeof publish.error === 'string' ? publish.error.slice(0, 500) : null,
+    },
+  };
+}
+
+function readCreatorVideoRecord(videoId) {
+  if (!/^[a-z0-9-]+$/i.test(videoId || '')) return null;
+  const filePath = creatorVideoMetaPath(videoId);
+  if (!fs.existsSync(filePath)) return null;
+  const record = normalizeCreatorVideoRecord(readJsonFileSafe(filePath, null));
+  if (!record) return null;
+  record.hasFile = fs.existsSync(creatorVideoFilePath(videoId));
+  return record;
+}
+
+function saveCreatorVideoRecord(record) {
+  ensureCreatorStorage();
+  const clean = normalizeCreatorVideoRecord(record);
+  if (!clean) return null;
+  fs.writeFileSync(creatorVideoMetaPath(clean.id), JSON.stringify(clean, null, 2) + '\n');
+  clean.hasFile = fs.existsSync(creatorVideoFilePath(clean.id));
+  return clean;
+}
+
+function transitionCreatorVideo(record, state, extra = {}, note = '') {
+  const nextState = normalizeCreatorState(state, record.state || 'pending');
+  const updatedAt = extra.updatedAt || new Date().toISOString();
+  return normalizeCreatorVideoRecord({
+    ...record,
+    ...extra,
+    state: nextState,
+    updatedAt,
+    stateHistory: appendCreatorStateHistory(extra.stateHistory != null ? extra.stateHistory : record.stateHistory, nextState, note, updatedAt),
+  });
+}
+
+function updateCreatorVideoRecord(videoId, updater) {
+  const current = readCreatorVideoRecord(videoId);
+  if (!current) return null;
+  const next = updater(current) || current;
+  return saveCreatorVideoRecord({ ...current, ...next, id: videoId });
+}
+
+function listCreatorVideos() {
+  ensureCreatorStorage();
+  let files = [];
+  try { files = fs.readdirSync(CREATOR_VIDEOS_DIR).filter((file) => file.endsWith('.json')); } catch { return []; }
+  return files
+    .map((file) => readCreatorVideoRecord(file.replace(/\.json$/, '')))
+    .filter(Boolean)
+    .map((video) => ({
+      id: video.id,
+      jobId: video.jobId,
+      title: video.title,
+      description: video.description,
+      topic: video.topic,
+      tags: video.tags,
+      score: video.score,
+      sceneCount: video.sceneCount,
+      sceneSeconds: video.sceneSeconds,
+      resolution: video.resolution,
+      state: video.state,
+      currentScene: video.currentScene,
+      createdAt: video.createdAt,
+      updatedAt: video.updatedAt,
+      hasFile: video.hasFile,
+      publish: video.publish,
+    }))
+    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+}
+
+function creatorCharacterPrompt() {
+  return 'A teal-haired AI news anchor woman with a sleek bob haircut, clear expressive eyes, modern broadcast makeup, and a polished futuristic wardrobe';
 }
 
 function sanitizeHustlerPublishConfig(input) {
@@ -1602,6 +1955,217 @@ function getLatestLocalActivityMs() {
     if (item.lastMs && item.lastMs > latest) latest = item.lastMs;
   }
   return latest;
+}
+
+function loadCreatorProviderConfig() {
+  const base = loadSecretaryConfig();
+  const provider = process.env.CREATOR_PROVIDER || 'auto';
+  const model = process.env.CREATOR_MODEL || base.model || DEFAULT_SECRETARY_MODEL;
+  let mode;
+  if (provider === 'off') mode = 'off';
+  else if (provider === 'api') mode = base.apiKey ? 'api' : 'off';
+  else if (provider === 'cli') mode = base.cli ? 'cli' : 'off';
+  else mode = base.cli ? 'cli' : (base.apiKey ? 'api' : 'off');
+  return { mode, apiKey: base.apiKey, model, cli: base.cli };
+}
+
+function parseGoogleScopes(scopeText) {
+  return new Set(String(scopeText || '').split(/\s+/).map((item) => item.trim()).filter(Boolean));
+}
+
+function getGoogleLinkStatus() {
+  const creds = loadGoogleCreds();
+  const tok = loadGoogleToken();
+  const scopes = parseGoogleScopes(tok && tok.scope);
+  return {
+    configured: !!creds,
+    connected: !!(creds && tok && tok.refresh_token),
+    scopeText: tok && typeof tok.scope === 'string' ? tok.scope : '',
+    hasYoutubeUploadScope: scopes.has(YOUTUBE_UPLOAD_SCOPE),
+  };
+}
+
+function hasUnfinishedCreatorJobForTopic(topic) {
+  const key = normalizeTopicKey(topic);
+  if (!key) return false;
+  return loadCreatorJobs().some((job) => (
+    CREATOR_UNFINISHED_STATUSES.has(job.status)
+    && normalizeTopicKey(job.topic) === key
+  ));
+}
+
+function enqueueCreatorJob(input, opts = {}) {
+  const topic = typeof input.topic === 'string' ? input.topic.trim().slice(0, 300) : '';
+  if (!topic) throw new Error('トピックを入力してください');
+  if (opts.dedupeTopic && hasUnfinishedCreatorJobForTopic(topic)) {
+    const existing = loadCreatorJobs().find((job) => (
+      CREATOR_UNFINISHED_STATUSES.has(job.status)
+      && normalizeTopicKey(job.topic) === normalizeTopicKey(topic)
+    ));
+    return { queued: false, job: existing || null };
+  }
+  const createdAt = new Date().toISOString();
+  const job = normalizeCreatorJob({
+    id: makeId('cjob'),
+    topic,
+    source: opts.source || '',
+    status: 'pending',
+    createdAt,
+    stateHistory: appendCreatorStateHistory([], 'pending', opts.note || '', createdAt),
+  });
+  const jobs = loadCreatorJobs();
+  jobs.push(job);
+  saveCreatorJobs(jobs);
+  return { queued: true, job };
+}
+
+function maybeQueueCreatorFromExplorer(topic) {
+  const config = loadCreatorConfig();
+  if (!config.autoFromExplorer) return null;
+  return enqueueCreatorJob({ topic }, {
+    dedupeTopic: true,
+    source: 'explorer',
+    note: '探検家の新着レポートから自動追加',
+  });
+}
+
+function stripJsonFence(text) {
+  let s = String(text || '').trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  return s.trim();
+}
+
+function parseCreatorScript(text, expectedSceneCount) {
+  const parsed = JSON.parse(stripJsonFence(text));
+  const script = normalizeCreatorScript(parsed, creatorCharacterPrompt());
+  if (!script.title || !script.description || !script.scenes.length) {
+    throw new Error('台本JSONの必須項目が不足しています');
+  }
+  if (expectedSceneCount && script.scenes.length !== expectedSceneCount) {
+    throw new Error(`scene数が不正です: expected ${expectedSceneCount}, got ${script.scenes.length}`);
+  }
+  return script;
+}
+
+function parseCreatorReview(text) {
+  const parsed = JSON.parse(stripJsonFence(text));
+  const review = normalizeCreatorReview(parsed);
+  if (!review || review.score == null) throw new Error('審査JSONの形式が不正です');
+  return review;
+}
+
+function appendDisclosureText(description, disclosureText) {
+  const body = String(description || '').trim();
+  const disclosure = String(disclosureText || '').trim();
+  if (!disclosure) return body;
+  if (!body) return disclosure;
+  return body.endsWith(disclosure) ? body : `${body}\n\n${disclosure}`;
+}
+
+function creatorScriptPrompt(job, config) {
+  const explorerBits = pickExplorerContext(job.topic);
+  const explorerText = explorerBits.length
+    ? `\n\n参考に使える保存済みの探検家レポート:\n${explorerBits.map((item) => `### ${item.topic}\n${item.report}`).join('\n\n')}`
+    : '';
+  const character = creatorCharacterPrompt();
+  return `あなたは日本語のショート動画企画ディレクターです。返答は JSON のみで、コードフェンスや前置きは禁止です。
+
+テーマ: ${job.topic}
+想定媒体: YouTube Shorts
+構成: ${config.sceneCount}シーン
+各シーン長: 約${config.sceneSeconds}秒
+
+JSON スキーマ:
+{
+  "title": "動画タイトル",
+  "description": "概要欄",
+  "tags": ["tag1", "tag2"],
+  "scenes": [
+    {
+      "visualPrompt": "English only. Must include the exact recurring character description.",
+      "dialogue": "日本語の短いセリフ",
+      "caption": "画面に焼き込む短い日本語字幕"
+    }
+  ]
+}
+
+必須ルール:
+- scenes は必ず ${config.sceneCount} 件ちょうど。
+- visualPrompt は英語のみ。毎回必ず次のキャラ記述を自然に含める:
+  "${character}"
+- visualPrompt には画作り、カメラ、照明、背景、動き、ニュースキャスターらしさを具体的に書く。
+- dialogue は H3 にそのまま読ませる日本語セリフ。1シーン1〜2文、短く、自然に。
+- caption は日本語で短く、スマホ視聴で読める長さにする。
+- タイトルはフック重視だが誇張しすぎない。
+- description は動画内容の要約と価値を簡潔に書く。断定しすぎず、誤情報リスクを抑える。
+- tags は最大10個、短く。
+- 同じティール髪キャラが全シーンで継続して登場する前提で作る。
+- 事実関係が曖昧なら断定を避け、一般論として安全な表現にする。${explorerText}`;
+}
+
+function creatorReviewPrompt(script, qualityThreshold) {
+  return `次のショート動画企画を厳しく審査してください。返答は JSON のみです。
+
+評価対象:
+- タイトル
+- 概要欄(description)
+- シーン構成
+
+採点ルーブリック(合計100点):
+- 視聴価値
+- フックの強さ
+- 構成の分かりやすさ
+- 誤情報リスクの低さ
+
+判定:
+- ${qualityThreshold}点以上なら verdict を "pass"
+- 未満なら verdict を "revise"
+
+JSON:
+{
+  "score": 0,
+  "verdict": "pass or revise",
+  "strengths": ["..."],
+  "issues": ["..."],
+  "fixInstructions": "改善指示"
+}
+
+タイトル:
+${script.title}
+
+概要欄:
+${script.description}
+
+タグ:
+${(script.tags || []).join(', ')}
+
+シーン:
+${script.scenes.map((scene, idx) => `## Scene ${idx + 1}\nvisualPrompt: ${scene.visualPrompt}\ndialogue: ${scene.dialogue}\ncaption: ${scene.caption}`).join('\n\n')}`;
+}
+
+function creatorMetadataRevisionPrompt(script, review) {
+  return `次のショート動画企画について、動画本体は変えずにタイトルと概要欄だけを書き直してください。返答は JSON のみです。
+
+JSON:
+{
+  "title": "改善後タイトル",
+  "description": "改善後概要欄"
+}
+
+改善指示:
+${review && review.fixInstructions ? review.fixInstructions : 'フックと分かりやすさを改善してください。'}
+
+主な課題:
+${review && review.issues && review.issues.length ? review.issues.map((issue) => `- ${issue}`).join('\n') : '- なし'}
+
+シーン要約:
+${script.scenes.map((scene, idx) => `Scene ${idx + 1}: ${scene.dialogue} / ${scene.caption}`).join('\n')}
+
+現在のタイトル:
+${script.title}
+
+現在の概要欄:
+${script.description}`;
 }
 
 function loadHustlerProviderConfig() {
@@ -2584,6 +3148,7 @@ function getHustlerStatus() {
     pendingJobs > 0 &&
     !hustlerRunning &&
     !explorerRunning &&
+    !creatorRunning &&
     provider.mode !== 'off' &&
     withinHours &&
     idle &&
@@ -2646,6 +3211,7 @@ function retryHustlerOutput(outputId) {
 async function executeHustlerJob(jobId) {
   if (hustlerRunning) throw new Error('別の内職ジョブを実行中です。');
   if (explorerRunning) throw new Error('探検家が調査中のため、少し待ってから実行してください。');
+  if (creatorRunning) throw new Error('動画職人が実行中のため、少し待ってから実行してください。');
   const cfg = loadHustlerProviderConfig();
   if (cfg.mode === 'off') {
     throw new Error('商人の実行には Claude CLI か Anthropic API キーが必要です。');
@@ -2851,6 +3417,587 @@ async function maybeRunHustlerScheduled() {
   return executeHustlerJob(jobs[0].id);
 }
 
+function creatorWorkDir(jobId) {
+  return path.join(CREATOR_WORK_DIR, jobId);
+}
+
+function creatorSceneFilePath(jobId, sceneIndex) {
+  return path.join(creatorWorkDir(jobId), `scene-${String(sceneIndex + 1).padStart(2, '0')}.mp4`);
+}
+
+function creatorConcatListPath(jobId) {
+  return path.join(creatorWorkDir(jobId), 'concat.txt');
+}
+
+async function creatorComfyJson(baseUrl, pathname, options = {}) {
+  const url = baseUrl.replace(/\/+$/, '') + pathname;
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    throw new Error(`ComfyUI ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+async function uploadCreatorReferenceImage(baseUrl) {
+  if (!fs.existsSync(CREATOR_REF_IMAGE_PATH)) return null;
+  const file = new File([fs.readFileSync(CREATOR_REF_IMAGE_PATH)], path.basename(CREATOR_REF_IMAGE_PATH), { type: 'image/png' });
+  const form = new FormData();
+  form.append('image', file, file.name);
+  form.append('type', 'input');
+  form.append('overwrite', 'true');
+  const res = await fetch(baseUrl.replace(/\/+$/, '') + '/upload/image', { method: 'POST', body: form });
+  if (!res.ok) {
+    throw new Error(`参照画像アップロード失敗: ${(await res.text()).slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+function creatorScenePrompt(scene, useReference) {
+  const bits = [];
+  if (useReference) bits.push('Use <Picture 1> as the exact identity reference for the recurring teal-haired AI news anchor.');
+  bits.push(scene.visualPrompt);
+  if (scene.dialogue) bits.push(`She speaks natural Japanese: 「${scene.dialogue}」.`);
+  if (scene.caption) bits.push(`Burn in concise Japanese caption text on screen: 「${scene.caption}」.`);
+  bits.push('Vertical smartphone short video, single continuous shot, no cuts, clean composition, professional audiovisual news segment.');
+  return bits.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function buildCreatorSceneWorkflow({ promptText, width, height, frameCount, filePrefix, refImageName = null }) {
+  const base = {
+    '6': { class_type: 'UNETLoader', inputs: { unet_name: refImageName ? 'minimax_h3_ref2va_pruned_int8_convrot.safetensors' : 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', weight_dtype: 'default' } },
+    '13': { class_type: 'CLIPLoader', inputs: { clip_name: 'qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors', type: 'minimax', device: 'cpu' } },
+    '11': { class_type: 'VAELoader', inputs: { vae_name: 'minimax_h3_video_vae_fp16.safetensors' } },
+    '24': { class_type: 'VAELoader', inputs: { vae_name: 'minimax_h3_audio_vae_fp32.safetensors' } },
+    '15': { class_type: 'RandomNoise', inputs: { noise_seed: Math.floor(Math.random() * 0x7fffffff) } },
+    '17': { class_type: 'KSamplerSelect', inputs: { sampler_name: 'res_multistep' } },
+    '9': { class_type: 'BasicScheduler', inputs: { model: ['6', 0], scheduler: 'simple', steps: 20, denoise: 1.0 } },
+    '16': { class_type: 'BasicGuider', inputs: { model: ['6', 0], conditioning: [refImageName ? '105' : '104', 0] } },
+    '14': { class_type: 'SamplerCustomAdvanced', inputs: { noise: ['15', 0], guider: ['16', 0], sampler: ['17', 0], sigmas: ['9', 0], latent_image: [refImageName ? '105' : '104', 1] } },
+    '10': { class_type: 'VAEDecode', inputs: { samples: ['14', 0], vae: ['11', 0] } },
+    '23': { class_type: 'VAEDecodeAudio', inputs: { samples: ['14', 0], vae: ['24', 0] } },
+    '91': { class_type: 'CreateVideo', inputs: { images: ['10', 0], fps: 24, audio: ['23', 0] } },
+    '92': { class_type: 'SaveVideo', inputs: { video: ['91', 0], filename_prefix: filePrefix, format: 'mp4', codec: 'h264' } },
+  };
+  if (refImageName) {
+    base['101'] = { class_type: 'LoadImage', inputs: { image: refImageName, upload: 'image' } };
+    base['105'] = {
+      class_type: 'MiniMaxH3ReferenceToVideo',
+      inputs: {
+        clip: ['13', 0],
+        vae: ['11', 0],
+        audio_vae: ['24', 0],
+        prompt: promptText,
+        width,
+        height,
+        length: frameCount,
+        ref_image_size: 'match',
+        ref_image_1: ['101', 0],
+      },
+    };
+  } else {
+    base['104'] = {
+      class_type: 'MiniMaxH3ImageToVideo',
+      inputs: {
+        clip: ['13', 0],
+        vae: ['11', 0],
+        prompt: promptText,
+        width,
+        height,
+        length: frameCount,
+      },
+    };
+  }
+  return base;
+}
+
+function findCreatorOutputAsset(value) {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findCreatorOutputAsset(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.filename === 'string' && /\.mp4$/i.test(value.filename)) return value;
+    for (const child of Object.values(value)) {
+      const found = findCreatorOutputAsset(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function waitForCreatorPrompt(baseUrl, promptId, timeoutMs = 30 * 60 * 1000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+    const history = await creatorComfyJson(baseUrl, `/history/${encodeURIComponent(promptId)}`);
+    if (!(promptId in history)) continue;
+    const item = history[promptId] || {};
+    const status = item.status || {};
+    if (status.completed) return item;
+    if (status.status_str === 'error') {
+      const msg = Array.isArray(status.messages)
+        ? status.messages.map((entry) => JSON.stringify(entry)).join('\n').slice(0, 2000)
+        : 'execution error';
+      throw new Error(`ComfyUI 実行エラー: ${msg}`);
+    }
+  }
+  throw new Error('ComfyUI シーン生成がタイムアウトしました(30分)');
+}
+
+async function downloadCreatorAsset(baseUrl, asset, destPath) {
+  const params = new URLSearchParams({
+    filename: asset.filename,
+    subfolder: asset.subfolder || '',
+    type: asset.type || 'output',
+  });
+  const res = await fetch(baseUrl.replace(/\/+$/, '') + '/view?' + params.toString());
+  if (!res.ok) throw new Error(`ComfyUI 出力取得失敗: ${(await res.text()).slice(0, 300)}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(destPath, buf);
+  return destPath;
+}
+
+async function runCreatorScene({ jobId, sceneIndex, scene, config, resolution }) {
+  ensureDir(creatorWorkDir(jobId));
+  const refUpload = fs.existsSync(CREATOR_REF_IMAGE_PATH) ? await uploadCreatorReferenceImage(config.comfyUrl) : null;
+  const frameCount = secondsToCreatorFrameCount(config.sceneSeconds);
+  const filePrefix = `video/creator-${jobId}-${sceneIndex + 1}`;
+  const workflow = buildCreatorSceneWorkflow({
+    promptText: creatorScenePrompt(scene, !!refUpload),
+    width: resolution.width,
+    height: resolution.height,
+    frameCount,
+    filePrefix,
+    refImageName: refUpload && refUpload.name ? refUpload.name : null,
+  });
+  const queued = await creatorComfyJson(config.comfyUrl, '/prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: workflow }),
+  });
+  const result = await waitForCreatorPrompt(config.comfyUrl, queued.prompt_id);
+  const asset = findCreatorOutputAsset(result.outputs || {});
+  if (!asset) throw new Error('ComfyUI 出力に mp4 が見つかりません');
+  const scenePath = creatorSceneFilePath(jobId, sceneIndex);
+  await downloadCreatorAsset(config.comfyUrl, asset, scenePath);
+  return { scenePath, frameCount };
+}
+
+async function concatCreatorScenes(jobId, sceneCount, destPath) {
+  const lines = [];
+  for (let i = 0; i < sceneCount; i++) {
+    const filePath = creatorSceneFilePath(jobId, i);
+    if (!fs.existsSync(filePath)) throw new Error(`連結対象が見つかりません: ${path.basename(filePath)}`);
+    lines.push(`file '${filePath.replace(/'/g, "'\\''")}'`);
+  }
+  fs.writeFileSync(creatorConcatListPath(jobId), lines.join('\n') + '\n');
+  await runSpawn('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', creatorConcatListPath(jobId), '-c', 'copy', destPath], { cwd: creatorWorkDir(jobId) });
+}
+
+async function reviewCreatorScript(script, cfg, qualityThreshold, timeoutSec) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return parseCreatorReview(await runHustlerTextTask({
+        cfg,
+        system: 'あなたはショート動画企画の審査担当です。返答は JSON のみです。',
+        prompt: creatorReviewPrompt(script, qualityThreshold),
+        maxTokens: 900,
+        timeoutSec,
+      }));
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  throw lastErr || new Error('動画審査JSONの解析に失敗しました');
+}
+
+function getCreatorRuntimeGuard(nowMs = Date.now()) {
+  const provider = loadCreatorProviderConfig();
+  const hustlerConfig = loadHustlerConfig();
+  const window5h = getWindow5hUsageStats();
+  const lastActivityMs = getLatestLocalActivityMs();
+  const idle = !lastActivityMs || (nowMs - lastActivityMs) >= hustlerConfig.idleMinutes * 60 * 1000;
+  const withinBudget = (window5h.totalTokens + HUSTLER_TOKEN_HEADROOM) < hustlerConfig.tokenBudget5h;
+  const blockers = [];
+  if (provider.mode === 'off') blockers.push('Claude CLI か Anthropic API が未設定です');
+  if (!idle) blockers.push(`遊休判定(${hustlerConfig.idleMinutes}分)を満たしていません`);
+  if (!withinBudget) blockers.push('直近5時間トークン予算を超過しています');
+  if (explorerRunning) blockers.push('探検家が実行中です');
+  if (hustlerRunning) blockers.push('商人が実行中です');
+  if (traderRunning) blockers.push('トレーダーが実行中です');
+  if (creatorRunning) blockers.push('動画職人が実行中です');
+  return {
+    mode: provider.mode,
+    model: provider.model,
+    cli: provider.cli,
+    apiKey: provider.apiKey,
+    idle,
+    idleMinutes: hustlerConfig.idleMinutes,
+    tokenBudget5h: hustlerConfig.tokenBudget5h,
+    window5h,
+    withinBudget,
+    blockers,
+    canRun: !blockers.length,
+  };
+}
+
+function getCreatorStatus() {
+  const config = loadCreatorConfig();
+  const runtime = getCreatorRuntimeGuard();
+  const jobs = loadCreatorJobs();
+  const today = localDateStr();
+  const runsToday = jobs.filter((job) => job.startedAt && String(job.startedAt).slice(0, 10) === today).length;
+  const pendingJobs = jobs.filter((job) => job.status === 'pending').length;
+  const lastRun = jobs
+    .map((job) => job.finishedAt || job.startedAt || '')
+    .filter(Boolean)
+    .sort()
+    .pop() || null;
+  const google = getGoogleLinkStatus();
+  const blockers = [];
+  if (!config.enabled) blockers.push('自動化が無効です');
+  if (!pendingJobs) blockers.push('待機ジョブがありません');
+  if (runsToday >= config.dailyLimit) blockers.push('今日の上限に達しています');
+  blockers.push(...runtime.blockers);
+  return {
+    ...config,
+    running: creatorRunning,
+    mode: runtime.mode,
+    idle: runtime.idle,
+    idleMinutes: runtime.idleMinutes,
+    window5h: runtime.window5h,
+    tokenBudget5h: runtime.tokenBudget5h,
+    pendingJobs,
+    runsToday,
+    dailyLimit: config.dailyLimit,
+    lastRun,
+    googleConnected: google.connected,
+    youtubeUploadScope: google.hasYoutubeUploadScope,
+    canRun: !blockers.length,
+    blockers,
+  };
+}
+
+function creatorCanPublishVideo(video) {
+  return !!(video && video.hasFile && (video.state === 'approved' || video.state === 'pending_review'));
+}
+
+async function publishCreatorVideo(videoId, options = {}) {
+  const record = readCreatorVideoRecord(videoId);
+  if (!record) throw new Error('動画が見つかりません');
+  if (!creatorCanPublishVideo(record)) throw new Error('投稿できる状態の動画ではありません');
+  const config = sanitizeCreatorConfig(options.config || loadCreatorConfig());
+  const google = getGoogleLinkStatus();
+  if (!google.connected || !google.hasYoutubeUploadScope) {
+    throw new Error('再認証が必要です(⚙️→Googleと連携)');
+  }
+
+  const videoPath = creatorVideoFilePath(videoId);
+  const stats = fs.statSync(videoPath);
+  const accessToken = await getGoogleAccessToken();
+  if (!accessToken) throw new Error('再認証が必要です(⚙️→Googleと連携)');
+
+  const attemptedAt = new Date().toISOString();
+  const uploadMeta = {
+    snippet: {
+      title: record.title,
+      description: appendDisclosureText(record.description, config.publish.disclosureText),
+      tags: record.tags,
+      categoryId: config.publish.categoryId,
+    },
+    status: {
+      privacyStatus: config.publish.privacyStatus,
+      selfDeclaredMadeForKids: false,
+      containsSyntheticMedia: true,
+    },
+  };
+
+  updateCreatorVideoRecord(videoId, (video) => transitionCreatorVideo(video, 'publishing', {
+    publish: { ...video.publish, attemptedAt, privacyStatus: config.publish.privacyStatus, error: null },
+  }, options.manual ? '手動投稿を開始' : '自動投稿を開始'));
+  if (record.jobId) {
+    updateCreatorJobById(record.jobId, (job) => transitionCreatorJob(job, 'publishing', {
+      publishError: null,
+    }, options.manual ? '手動投稿を開始' : '自動投稿を開始'));
+  }
+
+  try {
+    const initRes = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Length': String(stats.size),
+        'X-Upload-Content-Type': 'video/mp4',
+      },
+      body: JSON.stringify(uploadMeta),
+    });
+    if (!initRes.ok) throw new Error(`YouTube upload init ${initRes.status}: ${(await initRes.text()).slice(0, 300)}`);
+    const location = initRes.headers.get('location');
+    if (!location) throw new Error('YouTube upload URL を取得できませんでした');
+
+    const uploadRes = await fetch(location, {
+      method: 'PUT',
+      headers: {
+        'Content-Length': String(stats.size),
+        'Content-Type': 'video/mp4',
+      },
+      body: fs.readFileSync(videoPath),
+    });
+    if (!uploadRes.ok) throw new Error(`YouTube upload ${uploadRes.status}: ${(await uploadRes.text()).slice(0, 300)}`);
+    const data = await uploadRes.json();
+    const youtubeVideoId = data && data.id ? String(data.id) : '';
+    if (!youtubeVideoId) throw new Error('YouTube videoId を取得できませんでした');
+    const publishedAt = new Date().toISOString();
+    const youtubeUrl = `https://www.youtube.com/watch?v=${youtubeVideoId}`;
+    const updatedVideo = updateCreatorVideoRecord(videoId, (video) => transitionCreatorVideo(video, 'published', {
+      updatedAt: publishedAt,
+      publish: {
+        ...video.publish,
+        attemptedAt,
+        publishedAt,
+        videoId: youtubeVideoId,
+        url: youtubeUrl,
+        privacyStatus: config.publish.privacyStatus,
+        error: null,
+      },
+    }, options.manual ? '手動投稿に成功' : '自動投稿に成功'));
+    if (record.jobId) {
+      updateCreatorJobById(record.jobId, (job) => transitionCreatorJob(job, 'published', {
+        finishedAt: publishedAt,
+        publishedAt,
+        youtubeVideoId,
+        youtubeUrl,
+        publishError: null,
+      }, options.manual ? '手動投稿に成功' : '自動投稿に成功'));
+    }
+    return updatedVideo;
+  } catch (error) {
+    const message = String(error.message || error).slice(0, 500);
+    updateCreatorVideoRecord(videoId, (video) => transitionCreatorVideo(video, record.state === 'pending_review' ? 'pending_review' : 'approved', {
+      updatedAt: new Date().toISOString(),
+      publish: { ...video.publish, attemptedAt, privacyStatus: config.publish.privacyStatus, error: message },
+      error: message,
+    }, `投稿失敗: ${message}`));
+    if (record.jobId) {
+      updateCreatorJobById(record.jobId, (job) => transitionCreatorJob(job, job.status === 'pending_review' ? 'pending_review' : 'approved', {
+        publishError: message,
+      }, `投稿失敗: ${message}`));
+    }
+    throw new Error(message);
+  }
+}
+
+function resetStaleCreatorJobs() {
+  const jobs = loadCreatorJobs();
+  let changed = false;
+  for (let i = 0; i < jobs.length; i++) {
+    if (!CREATOR_RESTARTABLE_STATUSES.has(jobs[i].status)) continue;
+    jobs[i] = transitionCreatorJob(jobs[i], 'error', {
+      finishedAt: new Date().toISOString(),
+      error: 'サーバー再起動により中断しました。再実行してください。',
+    }, 'サーバー再起動により中断');
+    if (jobs[i].videoId) {
+      updateCreatorVideoRecord(jobs[i].videoId, (video) => transitionCreatorVideo(video, 'error', {
+        error: 'サーバー再起動により中断しました。再実行してください。',
+      }, 'サーバー再起動により中断'));
+    }
+    changed = true;
+  }
+  if (changed) saveCreatorJobs(jobs);
+}
+
+async function executeCreatorJob(jobId, options = {}) {
+  if (creatorRunning) throw new Error('動画職人が実行中です');
+  if (explorerRunning) throw new Error('探検家が実行中です');
+  if (hustlerRunning) throw new Error('商人が実行中です');
+  if (traderRunning) throw new Error('トレーダーが実行中です');
+
+  const runtime = getCreatorRuntimeGuard();
+  const blockers = options.skipRuntimeGuard
+    ? runtime.blockers.filter((item) => !item.startsWith('遊休判定') && !item.startsWith('直近5時間トークン予算'))
+    : runtime.blockers;
+  if (blockers.length) throw new Error(blockers[0]);
+
+  const jobs = loadCreatorJobs();
+  const idx = jobs.findIndex((job) => job.id === jobId);
+  if (idx < 0) throw new Error('ジョブが見つかりません');
+  if (CREATOR_RESTARTABLE_STATUSES.has(jobs[idx].status)) throw new Error('このジョブはすでに実行中です');
+
+  const config = loadCreatorConfig();
+  const provider = loadCreatorProviderConfig();
+  if (provider.mode === 'off') throw new Error('動画職人の実行には Claude CLI か Anthropic API キーが必要です。');
+  const timeoutSec = loadHustlerConfig().cliTimeoutSec;
+  const sceneCount = Math.max(1, Math.min(8, Math.round(Number(options.sceneCount) || config.sceneCount)));
+  const sceneSeconds = Math.max(2, Math.min(15, Math.round(Number(options.sceneSeconds) || config.sceneSeconds)));
+  const resolution = parseCreatorResolution(options.useDraft ? config.draftResolution : config.resolution);
+  const startedAt = new Date().toISOString();
+  const videoId = jobs[idx].videoId || makeId('cvid');
+  jobs[idx] = transitionCreatorJob(jobs[idx], 'scripting', {
+    startedAt,
+    finishedAt: null,
+    videoId,
+    currentScene: 0,
+    sceneCount,
+    error: null,
+    publishError: null,
+  }, '台本生成を開始');
+  saveCreatorJobs(jobs);
+  creatorRunning = true;
+
+  try {
+    const job = jobs[idx];
+    const scriptRaw = await runHustlerTextTask({
+      cfg: provider,
+      system: 'あなたは動画台本をJSONで返す短尺動画プランナーです。返答は JSON のみです。',
+      prompt: creatorScriptPrompt(job, { ...config, sceneCount, sceneSeconds }),
+      maxTokens: 2600,
+      timeoutSec,
+    });
+    let script = parseCreatorScript(scriptRaw, sceneCount);
+    let video = saveCreatorVideoRecord({
+      id: videoId,
+      jobId: job.id,
+      createdAt: startedAt,
+      updatedAt: new Date().toISOString(),
+      state: 'rendering',
+      topic: job.topic,
+      title: script.title,
+      description: script.description,
+      tags: script.tags,
+      score: null,
+      review: null,
+      script,
+      sceneCount: script.scenes.length,
+      sceneSeconds,
+      resolution: resolution.value,
+      currentScene: 0,
+      stateHistory: appendCreatorStateHistory([], 'rendering', '台本生成完了・シーン生成開始', new Date().toISOString()),
+      publish: {},
+    });
+    updateCreatorJobById(job.id, (current) => transitionCreatorJob(current, 'rendering', {
+      videoId,
+      currentScene: 0,
+      sceneCount: script.scenes.length,
+      script,
+    }, '台本生成完了・シーン生成開始'));
+
+    for (let sceneIndex = 0; sceneIndex < script.scenes.length; sceneIndex++) {
+      updateCreatorJobById(job.id, (current) => transitionCreatorJob(current, 'rendering', {
+        currentScene: sceneIndex + 1,
+        sceneCount: script.scenes.length,
+      }, `シーン ${sceneIndex + 1}/${script.scenes.length} を生成中`));
+      video = updateCreatorVideoRecord(videoId, (current) => transitionCreatorVideo(current, 'rendering', {
+        currentScene: sceneIndex + 1,
+      }, `シーン ${sceneIndex + 1}/${script.scenes.length} を生成中`));
+      await runCreatorScene({
+        jobId: job.id,
+        sceneIndex,
+        scene: script.scenes[sceneIndex],
+        config: { ...config, sceneSeconds },
+        resolution,
+      });
+    }
+
+    const finalVideoPath = creatorVideoFilePath(videoId);
+    await concatCreatorScenes(job.id, script.scenes.length, finalVideoPath);
+    video = updateCreatorVideoRecord(videoId, (current) => transitionCreatorVideo(current, 'reviewing', {
+      hasFile: true,
+      currentScene: script.scenes.length,
+      updatedAt: new Date().toISOString(),
+    }, '連結完了・審査開始'));
+    updateCreatorJobById(job.id, (current) => transitionCreatorJob(current, 'reviewing', {
+      currentScene: script.scenes.length,
+    }, '連結完了・審査開始'));
+
+    let review = await reviewCreatorScript(script, provider, config.qualityThreshold, timeoutSec);
+    let reviewAttempt = 0;
+    while (review.score < config.qualityThreshold && reviewAttempt < 1) {
+      reviewAttempt++;
+      const revisedRaw = await runHustlerTextTask({
+        cfg: provider,
+        system: 'あなたは動画メタデータ改善担当です。返答は JSON のみです。',
+        prompt: creatorMetadataRevisionPrompt(script, review),
+        maxTokens: 800,
+        timeoutSec,
+      });
+      const revised = JSON.parse(stripJsonFence(revisedRaw));
+      script = normalizeCreatorScript({
+        ...script,
+        title: revised && revised.title ? revised.title : script.title,
+        description: revised && revised.description ? revised.description : script.description,
+      }, creatorCharacterPrompt());
+      video = updateCreatorVideoRecord(videoId, (current) => transitionCreatorVideo(current, 'reviewing', {
+        title: script.title,
+        description: script.description,
+        script,
+      }, 'タイトル・概要欄を再生成'));
+      review = await reviewCreatorScript(script, provider, config.qualityThreshold, timeoutSec);
+    }
+
+    const passed = review.score >= config.qualityThreshold;
+    const finalState = passed ? 'approved' : 'pending_review';
+    const finishedAt = new Date().toISOString();
+    video = updateCreatorVideoRecord(videoId, (current) => transitionCreatorVideo(current, finalState, {
+      title: script.title,
+      description: script.description,
+      tags: script.tags,
+      script,
+      score: review.score,
+      review,
+      updatedAt: finishedAt,
+      error: null,
+    }, passed ? `審査合格 ${review.score}点` : `要確認 ${review.score}点`));
+    const updatedJob = updateCreatorJobById(job.id, (current) => transitionCreatorJob(current, finalState, {
+      finishedAt,
+      script,
+      score: review.score,
+      review,
+      error: null,
+      publishError: null,
+    }, passed ? `審査合格 ${review.score}点` : `要確認 ${review.score}点`));
+
+    if (passed && config.publish.enabled) {
+      try {
+        await publishCreatorVideo(videoId, { config, manual: false });
+      } catch (error) {
+        console.error('[creator] 自動投稿失敗:', error.message);
+      }
+    }
+    return updatedJob;
+  } catch (error) {
+    const message = String(error.message || error).slice(0, 500);
+    const current = updateCreatorJobById(jobId, (job) => transitionCreatorJob(job, 'error', {
+      finishedAt: new Date().toISOString(),
+      error: message,
+    }, `エラー: ${message}`));
+    if (current && current.videoId) {
+      updateCreatorVideoRecord(current.videoId, (video) => transitionCreatorVideo(video, 'error', {
+        updatedAt: new Date().toISOString(),
+        error: message,
+      }, `エラー: ${message}`));
+    }
+    throw error;
+  } finally {
+    creatorRunning = false;
+  }
+}
+
+async function maybeRunCreatorScheduled() {
+  const status = getCreatorStatus();
+  if (!status.canRun) return null;
+  const jobs = loadCreatorJobs().filter((job) => job.status === 'pending');
+  if (!jobs.length) return null;
+  jobs.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  console.log(`[creator] 定期実行を開始: ${jobs[0].id} (${jobs[0].topic})`);
+  return executeCreatorJob(jobs[0].id);
+}
+
 function getTraderRuntimeGuard(nowMs = Date.now()) {
   const provider = loadHustlerProviderConfig();
   const hustlerConfig = loadHustlerConfig();
@@ -2865,6 +4012,7 @@ function getTraderRuntimeGuard(nowMs = Date.now()) {
   if (explorerRunning) blockers.push('探検家が実行中です');
   if (hustlerRunning) blockers.push('商人が実行中です');
   if (traderRunning) blockers.push('トレーダーが実行中です');
+  if (creatorRunning) blockers.push('動画職人が実行中です');
   return {
     mode: provider.mode,
     model: provider.model,
@@ -3463,13 +4611,16 @@ async function doResearch(topic) {
   if (!st.topics.includes(topic)) st.topics.unshift(topic);
   st.topics = st.topics.slice(0, EXPLORER_MAX_TOPICS);
   saveExplorerState(st);
-  try { maybeQueueHustlerFromExplorer(topic); } catch (e) { console.error('[hustler] 探検家連携失敗:', e.message); }
+  try {
+    maybeQueueHustlerFromExplorer(topic);
+    maybeQueueCreatorFromExplorer(topic);
+  } catch (e) { console.error('[hustler] 探検家連携失敗:', e.message); }
   return { topic, report, at: st.reports[topic].at, provider };
 }
 
 /** 直近の「月曜9:00」を跨いでいたら、保存トピックを順次調査する */
 async function checkWeekly() {
-  if (explorerRunning || hustlerRunning) return;
+  if (explorerRunning || hustlerRunning || creatorRunning) return;
   const st = loadExplorerState();
   if (!st.topics.length) return;
   const now = new Date();
@@ -4198,7 +5349,7 @@ const server = http.createServer((req, res) => {
       .then(async (body) => {
         const topic = (typeof body.topic === 'string' ? body.topic : '').trim().slice(0, 80);
         if (!topic) throw new Error('トピックを入力してください');
-        if (explorerRunning || hustlerRunning) { sendJson(res, 200, { error: '別の調査/内職を実行中です。少し待ってから再度お試しください。', running: true }); return; }
+        if (explorerRunning || hustlerRunning || creatorRunning) { sendJson(res, 200, { error: '別の調査/生成ジョブを実行中です。少し待ってから再度お試しください。', running: true }); return; }
         explorerRunning = true;
         try {
           sendJson(res, 200, await doResearch(topic));
@@ -4362,6 +5513,106 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  /* ── 動画職人──────────────────────────── */
+  if (url.pathname === '/api/creator/status') {
+    sendJson(res, 200, getCreatorStatus());
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/creator/config') {
+    readJsonBody(req)
+      .then((body) => {
+        const config = saveCreatorConfig(body || {});
+        sendJson(res, 200, { ok: true, config, status: getCreatorStatus() });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (url.pathname === '/api/creator/jobs') {
+    if (req.method === 'GET') {
+      const jobs = loadCreatorJobs().sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      sendJson(res, 200, { jobs });
+      return;
+    }
+    if (req.method === 'POST') {
+      readJsonBody(req)
+        .then((body) => {
+          const queued = enqueueCreatorJob(body || {});
+          sendJson(res, 200, { ok: true, job: queued.job });
+        })
+        .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+      return;
+    }
+  }
+
+  if (req.method === 'DELETE' && /^\/api\/creator\/jobs\/[^/]+$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split('/').pop());
+    const jobs = loadCreatorJobs();
+    const idx = jobs.findIndex((job) => job.id === id);
+    if (idx < 0) { sendJson(res, 404, { error: 'ジョブが見つかりません' }); return; }
+    if (CREATOR_RESTARTABLE_STATUSES.has(jobs[idx].status)) { sendJson(res, 409, { error: '実行中ジョブは削除できません' }); return; }
+    const removed = jobs.splice(idx, 1)[0];
+    saveCreatorJobs(jobs);
+    sendJson(res, 200, { ok: true, job: removed });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/creator/run') {
+    readJsonBody(req)
+      .then(async (body) => {
+        let target = null;
+        if (body && typeof body.topic === 'string' && body.topic.trim()) {
+          target = enqueueCreatorJob({ topic: body.topic.trim() }).job;
+        } else {
+          const jobs = loadCreatorJobs();
+          target = body && body.id
+            ? jobs.find((job) => job.id === String(body.id))
+            : jobs.filter((job) => job.status === 'pending').sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))[0];
+        }
+        if (!target) throw new Error('実行できるジョブがありません');
+        sendJson(res, 200, {
+          ok: true,
+          job: await executeCreatorJob(target.id, {
+            skipRuntimeGuard: true,
+            useDraft: !!body.useDraft,
+            sceneCount: body.sceneCount,
+            sceneSeconds: body.sceneSeconds,
+          }),
+        });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
+  if (url.pathname === '/api/creator/videos') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { videos: listCreatorVideos() });
+      return;
+    }
+  }
+
+  if (req.method === 'GET' && /^\/api\/creator\/videos\/[^/]+$/.test(url.pathname)) {
+    const videoId = decodeURIComponent(url.pathname.split('/').pop());
+    const record = readCreatorVideoRecord(videoId);
+    const filePath = creatorVideoFilePath(videoId);
+    if (!record || !fs.existsSync(filePath)) { sendJson(res, 404, { error: '動画が見つかりません' }); return; }
+    res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store' });
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  if (req.method === 'POST' && /^\/api\/creator\/publish\/[^/]+$/.test(url.pathname)) {
+    const videoId = decodeURIComponent(url.pathname.split('/').pop());
+    Promise.resolve()
+      .then(async () => {
+        const video = await publishCreatorVideo(videoId, { manual: true });
+        sendJson(res, 200, { ok: true, video, status: getCreatorStatus() });
+      })
+      .catch((e) => sendJson(res, 500, { error: String(e.message) }));
+    return;
+  }
+
   /* ── トレーダー(ペーパートレード) ───────────── */
   if (url.pathname === '/api/trader/status') {
     sendJson(res, 200, getTraderStatus());
@@ -4517,9 +5768,11 @@ const server = http.createServer((req, res) => {
 });
 
 ensureHustlerStorage();
+ensureCreatorStorage();
 ensureTraderStorage();
 resetStaleHustlerJobs();
 queueRetryableHustlerErrors();
+resetStaleCreatorJobs();
 
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
@@ -4550,6 +5803,10 @@ function startServer() {
   runHustler();
   setInterval(runHustler, HUSTLER_CHECK_MS);
 
+  const runCreator = () => maybeRunCreatorScheduled().catch((e) => console.error('[creator] 定期実行エラー:', e.message));
+  runCreator();
+  setInterval(runCreator, HUSTLER_CHECK_MS);
+
   const runTrader = () => maybeRunTraderScheduled().catch((e) => console.error('[trader] 定期実行エラー:', e.message));
   runTrader();
   setInterval(runTrader, HUSTLER_CHECK_MS);
@@ -4562,6 +5819,8 @@ module.exports = {
   startServer,
   loadHustlerConfig,
   saveHustlerConfig,
+  loadCreatorConfig,
+  saveCreatorConfig,
   loadTraderConfig,
   saveTraderConfig,
   loadTraderFetchState,
@@ -4583,6 +5842,16 @@ module.exports = {
   getHustlerOutput,
   executeHustlerJob,
   maybeRunHustlerScheduled,
+  getCreatorStatus,
+  loadCreatorJobs,
+  saveCreatorJobs,
+  listCreatorVideos,
+  readCreatorVideoRecord,
+  saveCreatorVideoRecord,
+  executeCreatorJob,
+  maybeRunCreatorScheduled,
+  publishCreatorVideo,
+  enqueueCreatorJob,
   retryHustlerOutput,
   publishHustlerOutput,
   doResearch,
@@ -4626,5 +5895,10 @@ module.exports = {
     getTraderRuntimeGuard,
     getHustlerResumeDraftRecord,
     queueRetryableHustlerErrors,
+    parseCreatorResolution,
+    runCreatorScene,
+    concatCreatorScenes,
+    creatorVideoFilePath,
+    transitionCreatorVideo,
   },
 };
