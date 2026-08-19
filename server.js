@@ -4259,7 +4259,9 @@ function computeTraderEquity(portfolio, latestPrices, config) {
   for (const asset of config.assets) {
     const pos = portfolio.positions[asset];
     if (!pos || pos.qty <= 0) continue;
-    const price = Number(latestPrices[asset] && latestPrices[asset].price);
+    // 価格マップは {price} 形式(status経路)と {jpy} 形式(生データ経路)の両方が来る
+    const raw = latestPrices && latestPrices[asset];
+    const price = Number(raw && (raw.price != null ? raw.price : raw.jpy));
     const value = Number.isFinite(price) ? pos.qty * price : 0;
     const cost = pos.qty * pos.avgCost;
     positions[asset] = {
